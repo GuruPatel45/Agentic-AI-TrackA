@@ -6,11 +6,11 @@ streamlit>=1.40.0
 # ==============================
 # LangChain (0.3.x - supports numpy 2.x and Python 3.14)
 # ==============================
-langchain==0.3.25
-langchain-core==0.3.59
-langchain-community==0.3.24
-langchain-openai==0.3.18
-langchain-google-genai==2.1.4
+langchain>=0.3.25
+langchain-core>=0.3.61
+langchain-community>=0.3.24
+langchain-openai>=0.3.18
+langchain-google-genai>=2.1.4
 
 # ==============================
 # LLM Providers
