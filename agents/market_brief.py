@@ -5,7 +5,6 @@
 
 import logging
 import json
-from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 
 logger = logging.getLogger(__name__)
@@ -88,7 +87,7 @@ def generate_market_brief(llm, nifty_data: dict, sensex_data: dict,
                            news_headlines: str, mood: str) -> str:
     """Generate AI market brief using LLM."""
     try:
-        chain = LLMChain(llm=llm, prompt=MARKET_BRIEF_PROMPT, verbose=False)
+        chain = MARKET_BRIEF_PROMPT | llm
 
         nifty_str = (
             f"Nifty 50: {nifty_data.get('current_price', 'N/A')} "
@@ -124,7 +123,7 @@ def generate_market_brief(llm, nifty_data: dict, sensex_data: dict,
             "news_headlines": news_headlines or "No news data available",
             "market_mood": mood,
         })
-        return response["text"]
+        return response.content
 
     except Exception as e:
         logger.error("generate_market_brief failed: %s", e, exc_info=True)
@@ -137,7 +136,7 @@ def generate_market_brief(llm, nifty_data: dict, sensex_data: dict,
 def generate_comparison_summary(llm, symbols: list, comparison_data: str, signals: list) -> str:
     """Generate AI stock comparison summary."""
     try:
-        chain = LLMChain(llm=llm, prompt=STOCK_COMPARISON_PROMPT, verbose=False)
+        chain = STOCK_COMPARISON_PROMPT | llm
 
         signals_str = "\n".join([
             f"• {s.get('symbol', '')}: {s.get('signal', 'N/A')} "
@@ -150,7 +149,7 @@ def generate_comparison_summary(llm, symbols: list, comparison_data: str, signal
             "comparison_data": comparison_data,
             "signals": signals_str or "Signal data unavailable",
         })
-        return response["text"]
+        return response.content
 
     except Exception as e:
         logger.error("generate_comparison_summary failed: %s", e, exc_info=True)
