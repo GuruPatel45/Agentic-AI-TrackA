@@ -4,9 +4,9 @@
 # ============================================================
 
 import json
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.chains import LLMChain
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
 
 from llm import get_llm
 from prompts import (
@@ -24,65 +24,77 @@ from database.db_manager import save_analysis
 class FinancialAgent:
     """
     Main AI financial agent.
-    
+
     Capabilities:
     - Conversational Q&A about Indian stocks (with memory)
     - Full stock analysis combining price, fundamentals, technicals, news
     - Multi-stock comparison
     - Portfolio analysis
     - News summarization
-    
+
     Architecture:
     - LLM: Gemini or OpenAI (configured via .env)
-    - Memory: ConversationBufferWindowMemory (last 10 exchanges)
+    - Memory: InMemoryChatMessageHistory (last 10 exchanges)
     - Prompts: Specialized templates per task
     """
 
     def __init__(self):
         self.llm = get_llm()
-        # Window memory keeps last 10 conversation turns
-        self.memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=10,
-        )
+        self._chat_history = InMemoryChatMessageHistory()
+
+    def _trim_history(self, k=10):
+        """Keep only last k*2 messages (k human + k AI)."""
+        messages = self._chat_history.messages
+        if len(messages) > k * 2:
+            self._chat_history.clear()
+            for msg in messages[-(k * 2):]:
+                self._chat_history.add_message(msg)
 
     def chat(self, user_message: str) -> str:
         """
         General conversational interface with memory.
-        
+
         The agent remembers context across turns within a session,
         so users can ask follow-up questions naturally.
-        
+
         Args:
             user_message: User's natural language query
-        
+
         Returns:
             AI response string
         """
         try:
             prompt = get_chat_prompt()
-            chain = LLMChain(
-                llm=self.llm,
-                prompt=prompt,
-                memory=self.memory,
-                verbose=False,
-            )
-            response = chain.invoke({"input": user_message})
-            return response["text"]
+            chain = prompt | self.llm
+
+            # Build messages with history
+            history_messages = self._chat_history.messages
+            # Pass history + current input
+            full_input = {
+                "input": user_message,
+                "chat_history": history_messages,
+            }
+            response = chain.invoke(full_input)
+
+            # Store in memory
+            self._chat_history.add_user_message(user_message)
+            self._chat_history.add_ai_message(response.content)
+            self._trim_history()
+
+            return response.content
         except Exception as e:
             return f"❌ Error: {str(e)}\n\nPlease check your API key and internet connection."
 
     def analyze_stock(self, symbol: str) -> dict:
         """
         Full multi-dimensional stock analysis.
-        
+
         Gathers data from all sources, runs AI interpretation,
         and returns structured results including AI commentary.
-        
+
         Args:
             symbol: NSE stock symbol e.g. 'RELIANCE.NS'
-        
+
         Returns:
             dict with price_data, fundamental_data, technical_summary,
                   news_data, ai_analysis, raw_df (for charting)
@@ -150,7 +162,7 @@ class FinancialAgent:
         """Internal: Call LLM to generate analysis narrative."""
         try:
             prompt = get_stock_analysis_prompt()
-            chain = LLMChain(llm=self.llm, prompt=prompt, verbose=False)
+            chain = prompt | self.llm
 
             # Format news articles for the prompt
             articles_text = "\n".join([
@@ -167,17 +179,17 @@ class FinancialAgent:
                 "technical_data": json.dumps(technical_summary, default=str, indent=2),
                 "news_sentiment": f"{news_data.get('summary', '')}\n\nRecent Headlines:\n{articles_text}",
             })
-            return response["text"]
+            return response.content
         except Exception as e:
             return f"AI analysis unavailable: {str(e)}"
 
     def compare_stocks_with_ai(self, symbols: list) -> dict:
         """
         Compare multiple stocks and generate AI commentary.
-        
+
         Args:
             symbols: List of stock symbols e.g. ['TCS.NS', 'INFY.NS']
-        
+
         Returns:
             dict with comparison_df and ai_commentary
         """
@@ -196,7 +208,7 @@ class FinancialAgent:
 
             # AI commentary
             prompt = get_comparison_prompt()
-            chain = LLMChain(llm=self.llm, prompt=prompt, verbose=False)
+            chain = prompt | self.llm
             response = chain.invoke({
                 "comparison_data": df.to_string(index=False),
                 "sector": sector,
@@ -204,7 +216,7 @@ class FinancialAgent:
 
             return {
                 "comparison_df": df,
-                "ai_commentary": response["text"],
+                "ai_commentary": response.content,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -212,11 +224,11 @@ class FinancialAgent:
     def analyze_portfolio_with_ai(self, portfolio_data: list, current_prices: dict) -> dict:
         """
         Analyze user portfolio and provide AI insights.
-        
+
         Args:
             portfolio_data: List of holdings from database
             current_prices: Dict of {symbol: current_price}
-        
+
         Returns:
             dict with portfolio_df, metrics, and ai_analysis
         """
@@ -259,7 +271,7 @@ class FinancialAgent:
 
             # AI analysis
             prompt = get_portfolio_prompt()
-            chain = LLMChain(llm=self.llm, prompt=prompt, verbose=False)
+            chain = prompt | self.llm
             response = chain.invoke({
                 "portfolio_data": df.to_string(index=False),
                 "total_invested": f"{total_invested:,.2f}",
@@ -274,7 +286,7 @@ class FinancialAgent:
                 "current_value": total_current,
                 "pnl": total_pnl,
                 "pnl_pct": total_pnl_pct,
-                "ai_analysis": response["text"],
+                "ai_analysis": response.content,
             }
 
         except Exception as e:
@@ -282,4 +294,4 @@ class FinancialAgent:
 
     def clear_memory(self):
         """Clear conversation history."""
-        self.memory.clear()
+        self._chat_history.clear()
