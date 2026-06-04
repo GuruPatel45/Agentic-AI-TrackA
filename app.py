@@ -1172,7 +1172,7 @@ elif page == "Portfolio Tracker":
         p_qty  = fb1.number_input("Quantity",       min_value=1,    value=10)
         p_buy  = fb2.number_input("Buy Price (₹)",  min_value=0.01, value=1000.0, step=0.01)
         p_date = fb3.date_input("Buy Date")
-        p_note = st.text_area("Notes (optional)", height=65)
+        p_note = st.text_area("Notes (optional)", height=68)
         if st.button("➕ Add to Portfolio", type="primary"):
             if p_sym and p_buy > 0:
                 ok, ns = validate_symbol(p_sym)
