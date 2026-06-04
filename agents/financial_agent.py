@@ -372,7 +372,8 @@ class FinancialAgent:
 
             structured_context = f"""
 You are FinSaarthi 🇮🇳 — a highly experienced investment strategist and equity strategist.
-Analyze the user's query and provide a direct, highly accurate, and concise answer based ONLY on the processed backend system data below:
+Analyze the user's query and provide a direct, highly accurate, and concise answer. 
+You have access to the following backend system data for specific stock queries. If the user asks about this specific stock, prioritize this data. If the user asks a general finance or market question (like "What is SIP?", "What is Nifty 50?"), use your extensive financial knowledge to answer it naturally.
 
 [VERIFIED SYSTEM PIPELINE DATA]
 - symbol: {symbol}
@@ -388,8 +389,9 @@ User Question: {user_message}
 
 CRITICAL INSTRUCTIONS:
 1. Return a direct, concise, and highly professional answer.
-2. If the user asked for a price on a date that falls on a weekend (Saturday or Sunday), state clearly that the date was a weekend/holiday, and provide the unadjusted trading prices of the most recent prior trading day (typically Friday).
-3. Do NOT mention the backend pipeline details or code structures in your response. Keep it completely natural, human-like, and strategically sound.
+2. If the user asked for a price on a date that falls on a weekend, state clearly that it was a holiday/weekend and provide the last available trading price.
+3. Do NOT mention the backend pipeline details, code structures, or the fact that data was "provided" to you. Keep it completely natural, human-like, and strategically sound.
+4. For general finance definitions, strategies, or concepts (e.g. SIP, Mutual Funds, Options), just explain them using your general knowledge without apologizing for missing system data.
 """
 
             # -------------------------------------------------------------
