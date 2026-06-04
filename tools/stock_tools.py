@@ -126,8 +126,9 @@ def batch_fetch_prices(symbols: List[str]) -> dict:
 
 
 # -------------------------------------------------------------
-# STOCK PRICE
+# CORE DATA FUNCTIONS
 # -------------------------------------------------------------
+@_get_st_cache_data()(ttl=60)
 def get_stock_price(symbol: str, target_date: str = None) -> dict:
     """Get real-time stock price or precise historical data."""
     key = f"price_{symbol}_{target_date if target_date else 'live'}"
@@ -299,9 +300,14 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
         change = current_price - prev_price
         change_pct = (change / prev_price * 100) if prev_price else 0
         
-        if "Open" not in hist.columns:
-            hist["Open"] = hist["Close"]
-        hist_data_str = ",".join([f"{d.strftime('%d-%m-%Y')} (Open: {o:.1f}, Close: {c:.1f})" for d, o, c in zip(hist.index, hist['Open'], hist['Close'])])
+        if not hist.empty and "Open" not in hist.columns:
+            if "Close" in hist.columns:
+                hist["Open"] = hist["Close"]
+        
+        if not hist.empty:
+            hist_data_str = ",".join([f"{d.strftime('%d-%m-%Y')} (Open: {o:.1f}, Close: {c:.1f})" for d, o, c in zip(hist.index, hist.get('Open', []), hist.get('Close', []))])
+        else:
+            hist_data_str = "N/A"
         
         result = {
             "HISTORICAL_DATA": hist_data_str,
