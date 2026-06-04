@@ -18,14 +18,12 @@ class Settings:
         # Check Streamlit secrets first (for cloud deployment)
         try:
             import streamlit as st
-            import os
-            
-            # Prevent Streamlit from rendering 'No secrets files found' by ensuring the file exists
-            has_secrets = os.path.exists(".streamlit/secrets.toml") or os.path.exists(os.path.expanduser("~/.streamlit/secrets.toml"))
-            
-            if has_secrets and hasattr(st, "secrets") and key in st.secrets:
-                return st.secrets[key]
-        except Exception:
+            try:
+                if key in st.secrets:
+                    return st.secrets[key]
+            except Exception:
+                pass
+        except ImportError:
             pass
         # Fallback to local .env
         import os
