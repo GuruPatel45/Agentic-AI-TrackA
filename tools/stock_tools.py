@@ -162,7 +162,7 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
             except:
                 pass # Fallback to YFinance if NSE site is down
 
-        ticker = yf.Ticker(symbol, session=_session)
+        ticker = yf.Ticker(symbol)
         if target_date:
             # Fallback YFinance Logic for non-NSE stocks or if nsepython fails
             try:
@@ -214,9 +214,10 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
             # For live requests, try to fetch Nifty from nsepython FIRST because yfinance fails often on Streamlit Cloud.
             if symbol == "^NSEI":
                 try:
+                    # 1. Try nsepython first (Works locally)
                     from nsepython import nse_get_index_quote
                     idx_data = nse_get_index_quote("NIFTY 50")
-                    if idx_data and "last" in idx_data:
+                    if isinstance(idx_data, dict) and "last" in idx_data:
                         actual_price = float(str(idx_data["last"]).replace(",", ""))
                         prev_close = float(str(idx_data["previousClose"]).replace(",", ""))
                         change = actual_price - prev_close
@@ -239,7 +240,36 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
                         _cache[key] = res_dict
                         return res_dict
                 except Exception as e:
-                    logger.warning(f"nsepython index fetch failed for {symbol}: {e}")
+                    logger.warning(f"nsepython fetch failed: {e}")
+
+                try:
+                    # 2. Try Google Finance Scraper (Works on Streamlit Cloud)
+                    import urllib.request, re
+                    req = urllib.request.Request('https://www.google.com/finance/quote/NIFTY_50:INDEXNSE', headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                    html = urllib.request.urlopen(req, timeout=5).read().decode('utf-8')
+                    match = re.search(r'class="YMlKec fxKbKc"[^>]*>([^<]+)<', html)
+                    if match:
+                        actual_price = float(match.group(1).replace(",", "").replace("₹", ""))
+                        # Calculate previous close based on change pct if possible, or just default to 0 change
+                        res_dict = {
+                            "current_price": actual_price,
+                            "open_price": actual_price,
+                            "previous_close": actual_price,
+                            "change": 0.0,
+                            "change_pct": 0.0,
+                            "symbol": symbol,
+                            "company_name": "Nifty 50",
+                            "52_week_high": "N/A",
+                            "52_week_low": "N/A",
+                            "market_cap_str": "N/A",
+                            "sector": "Index",
+                            "last_closing_date": "Live",
+                            "search_context": "Index: Nifty 50"
+                        }
+                        _cache[key] = res_dict
+                        return res_dict
+                except Exception as e:
+                    logger.warning(f"Google Finance fetch failed: {e}")
 
             # Fallback to yfinance if nsepython fails or if it's not an index
             hist = ticker.history(period="3mo")
