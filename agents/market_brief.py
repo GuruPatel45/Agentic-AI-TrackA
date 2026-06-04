@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 MARKET_BRIEF_PROMPT = PromptTemplate(
-    input_variables=["nifty_data", "sensex_data", "sector_performance", "market_breadth", "news_headlines", "market_mood"],
+    input_variables=["current_date", "nifty_data", "sensex_data", "sector_performance", "market_breadth", "news_headlines", "market_mood"],
     template="""You are FinSaarthi, an expert Indian financial market analyst.
 
-Generate a concise, insightful Daily Market Brief for Indian investors based on this data:
+Generate a concise, insightful Daily Market Brief for Indian investors for TODAY ({current_date}) based on this data:
 
 📊 INDEX PERFORMANCE:
 {nifty_data}
@@ -115,7 +115,9 @@ def generate_market_brief(llm, nifty_data: dict, sensex_data: dict,
             f"A/D Ratio: {adr:.2f}, Avg Change: {avch:+.2f}%"
         )
 
+        import datetime
         response = chain.invoke({
+            "current_date": datetime.datetime.now().strftime("%B %d, %Y"),
             "nifty_data": nifty_str,
             "sensex_data": sensex_str,
             "sector_performance": sector_str,
