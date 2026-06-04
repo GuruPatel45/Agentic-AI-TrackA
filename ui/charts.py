@@ -97,7 +97,7 @@ def create_macd_chart(df, symbol):
     return fig
 
 
-def create_comparison_chart(symbols, df_compare=None):
+def create_comparison_chart(symbols, df_compare=None, fullscreen=False):
     fig = go.Figure()
     palette = ["#3B82F6","#22C55E","#F97316","#8B5CF6","#F59E0B"]
     for i, symbol in enumerate(symbols):
@@ -108,14 +108,59 @@ def create_comparison_chart(symbols, df_compare=None):
             normalized = (hist["Close"] / hist["Close"].iloc[0]) * 100
             fig.add_trace(go.Scatter(x=hist.index, y=normalized,
                                       name=symbol.replace(".NS",""),
-                                      line=dict(color=palette[i%len(palette)], width=2.5)))
+                                      line=dict(color=palette[i%len(palette)], width=2.5 if fullscreen else 1.5)))
         except Exception:
             continue
-    fig.add_hline(y=100, line_dash="dash", line_color="rgba(255,255,255,0.3)")
-    fig.update_layout(**CHART_THEME,
-                       title=dict(text="📊 Normalized Performance (Base=100)", font=dict(size=16), x=0.02),
-                       yaxis_title="Return Index (Base=100)", height=450, hovermode="x unified",
-                       yaxis=dict(ticksuffix="%"))
+    fig.add_hline(y=100, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+    
+    # Base layout matching interactive dashboard chart
+    base_layout = dict(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="Outfit, sans-serif", color='#94A3B8'),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#1E293B", font_size=13, font_family="JetBrains Mono, monospace"),
+        showlegend=True,
+        dragmode="pan",
+        uirevision="comp_chart",
+    )
+    
+    if fullscreen:
+        fig.update_layout(**base_layout,
+                           height=700,
+                           margin=dict(l=5, r=5, t=35, b=10),
+                           legend=dict(
+                               orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
+                               font=dict(size=12)
+                           ))
+    else:
+        fig.update_layout(**base_layout,
+                           height=320,
+                           autosize=True,
+                           margin=dict(l=0, r=0, t=35, b=0),
+                           legend=dict(
+                               orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
+                               font=dict(size=10)
+                           ))
+
+    fig.update_xaxes(
+        showgrid=False, showline=False, zeroline=False,
+        type="date",
+        tickfont=dict(color="#64748B", size=10 if not fullscreen else 11),
+        rangeslider_visible=False,
+        fixedrange=False,
+        autorange=True,
+    )
+    fig.update_yaxes(
+        showgrid=True, gridcolor='rgba(51, 65, 85, 0.3)', griddash='dash',
+        zeroline=False,
+        tickfont=dict(color="#64748B", size=10 if not fullscreen else 11),
+        side="right",
+        ticksuffix="%",
+        fixedrange=False,
+        autorange=True,
+    )
+
     return fig
 
 
@@ -137,47 +182,50 @@ def create_sentiment_gauge(score):
             ],
         },
     ))
-    fig.update_layout(**CHART_THEME, height=280, margin=dict(l=30, r=30, t=40, b=20))
     return fig
 
 
 def create_market_mood_chart(score):
     if score >= 65:
-        bar_color = COLORS["success"]
+        bar_color = "#10B981"  # Success
     elif score >= 45:
-        bar_color = COLORS["warning"]
+        bar_color = "#F59E0B"  # Warning
     else:
-        bar_color = COLORS["danger"]
+        bar_color = "#EF4444"  # Danger
         
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=score,
-        number={"font": {"size": 42, "color": bar_color, "family": "Outfit, sans-serif"}, "valueformat": ".0f"},
+        number={"font": {"size": 48, "color": bar_color, "family": "Outfit, sans-serif"}, "valueformat": ".0f"},
         gauge={
             "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#64748B", "nticks": 5},
-            "bar": {"color": bar_color, "thickness": 0.3},
-            "bgcolor": "rgba(15, 23, 41, 0.4)",
+            "bar": {"color": bar_color, "thickness": 0.25},
+            "bgcolor": "rgba(255, 255, 255, 0.03)",
             "borderwidth": 0,
             "steps": [
-                {"range": [0, 45], "color": "rgba(239, 68, 68, 0.15)"},
-                {"range": [45, 65], "color": "rgba(245, 158, 11, 0.15)"},
-                {"range": [65, 100], "color": "rgba(16, 185, 129, 0.15)"},
+                {"range": [0, 45], "color": "rgba(239, 68, 68, 0.08)"},
+                {"range": [45, 65], "color": "rgba(245, 158, 11, 0.08)"},
+                {"range": [65, 100], "color": "rgba(16, 185, 129, 0.08)"},
             ],
             "threshold": {
-                "line": {"color": "white", "width": 3},
+                "line": {"color": "white", "width": 4},
                 "thickness": 0.8,
                 "value": score
             }
         }
     ))
     
-    fig.add_annotation(x=0.0, y=0.0, xref="paper", yref="paper", xanchor="left", yanchor="bottom", text="Extreme Fear", font=dict(color="#EF4444", size=12, family="Outfit"), showarrow=False)
-    fig.add_annotation(x=1.0, y=0.0, xref="paper", yref="paper", xanchor="right", yanchor="bottom", text="Extreme Greed", font=dict(color="#10B981", size=12, family="Outfit"), showarrow=False)
+    fig.add_annotation(x=0.15, y=0.1, xref="paper", yref="paper", xanchor="center", yanchor="top", text="FEAR", font=dict(color="#EF4444", size=13, family="Outfit", weight="bold"), showarrow=False)
+    fig.add_annotation(x=0.85, y=0.1, xref="paper", yref="paper", xanchor="center", yanchor="top", text="GREED", font=dict(color="#10B981", size=13, family="Outfit", weight="bold"), showarrow=False)
+    fig.add_annotation(x=0.5, y=0.0, xref="paper", yref="paper", xanchor="center", yanchor="top", text="MARKET MOOD SCORE", font=dict(color="#64748B", size=10, family="JetBrains Mono"), showarrow=False)
 
     fig.update_layout(
-        **CHART_THEME,
-        height=220,
-        margin=dict(l=10, r=10, t=20, b=10)
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(family="Outfit, sans-serif", color='#94A3B8'),
+        height=260,
+        margin=dict(l=10, r=10, t=30, b=30),
+        template="plotly_dark"
     )
     return fig
 
@@ -234,16 +282,34 @@ def create_portfolio_pie(portfolio_df):
     if portfolio_df.empty:
         return _empty_chart("No portfolio data")
     palette = ["#3B82F6","#22C55E","#F97316","#8B5CF6","#F59E0B","#EC4899","#14B8A6","#84CC16"]
+    labels = [s.replace(".NS", "") for s in portfolio_df["Symbol"]]
     fig = go.Figure(go.Pie(
-        labels=portfolio_df["Symbol"], values=portfolio_df["Value (₹)"],
-        hole=0.5, textinfo="label+percent", textfont=dict(size=13),
-        marker=dict(colors=palette[:len(portfolio_df)],
-                    line=dict(color="#0A0E1A", width=2)),
+        labels=labels,
+        values=portfolio_df["Value (₹)"],
+        hole=0.55,
+        textinfo="label+percent",
+        textfont=dict(size=11, family="JetBrains Mono, monospace", color="#E2E8F0"),
+        marker=dict(
+            colors=palette[:len(portfolio_df)],
+            line=dict(color="rgba(0,0,0,0)", width=0)
+        ),
+        hovertemplate="<b>%{label}</b><br>₹%{value:,.0f}<br>%{percent}<extra></extra>",
     ))
-    fig.update_layout(**CHART_THEME, title=dict(text="Portfolio Allocation", font=dict(size=16), x=0.02),
-                       height=380, annotations=[dict(text="Portfolio", x=0.5, y=0.5,
-                                                     font_size=14, showarrow=False,
-                                                     font_color="#9CA3AF")])
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Outfit, sans-serif", color="#94A3B8"),
+        height=300,
+        margin=dict(l=0, r=0, t=5, b=0),
+        showlegend=False,
+        annotations=[dict(
+            text="Allocation",
+            x=0.5, y=0.5,
+            font=dict(size=12, family="Outfit, sans-serif", color="#64748B"),
+            showarrow=False
+        )],
+        hoverlabel=dict(bgcolor="#1E293B", font_size=12, font_family="JetBrains Mono, monospace"),
+    )
     return fig
 
 
@@ -268,17 +334,91 @@ def create_sip_chart(yearly_data):
 
 def create_pnl_chart(rows):
     if not rows: return _empty_chart("No holdings data")
-    symbols = [r["Symbol"] for r in rows]
-    pnl_pcts = [float(str(r["Return %"]).replace("%","").replace("+","")) for r in rows]
-    colors_list = [COLORS["success"] if p >= 0 else COLORS["danger"] for p in pnl_pcts]
-    fig = go.Figure(go.Bar(x=pnl_pcts, y=symbols, orientation="h", marker_color=colors_list,
-                            text=[f"{p:+.1f}%" for p in pnl_pcts],
-                            textposition="outside", textfont=dict(color="#E5E7EB", size=12)))
-    fig.add_vline(x=0, line_color="rgba(255,255,255,0.3)", line_width=1)
-    fig.update_layout(**CHART_THEME, title=dict(text="Holdings Return %", font=dict(size=14), x=0.02),
-                       height=max(200, len(rows)*45), showlegend=False,
-                       xaxis=dict(ticksuffix="%"), margin=dict(l=100, r=80, t=50, b=30))
+    symbols  = [r["Symbol"].replace(".NS", "") for r in rows]
+    pnl_pcts = [float(str(r["Return %"]).replace("%", "").replace("+", "")) for r in rows]
+
+    pos_c  = "#10B981"
+    neg_c  = "#EF4444"
+    pos_g  = "rgba(16,185,129,0.18)"
+    neg_g  = "rgba(239,68,68,0.18)"
+
+    dot_c  = [pos_c if p >= 0 else neg_c for p in pnl_pcts]
+    glow_c = [pos_g if p >= 0 else neg_g for p in pnl_pcts]
+
+    fig = go.Figure()
+
+    # ── stems (0 → value) ──
+    for i, (sym, pct, dc) in enumerate(zip(symbols, pnl_pcts, dot_c)):
+        fig.add_trace(go.Scatter(
+            x=[0, pct], y=[sym, sym],
+            mode="lines", line=dict(color=dc, width=2.5),
+            showlegend=False, hoverinfo="skip", cliponaxis=False,
+        ))
+
+    # ── glow rings ──
+    fig.add_trace(go.Scatter(
+        x=pnl_pcts, y=symbols, mode="markers",
+        marker=dict(size=18, color=glow_c, line=dict(width=0)),
+        showlegend=False, hoverinfo="skip", cliponaxis=False,
+    ))
+
+    # ── dots (no text here to avoid overlap) ──
+    fig.add_trace(go.Scatter(
+        x=pnl_pcts, y=symbols, mode="markers",
+        marker=dict(size=10, color=dot_c,
+                    line=dict(color="rgba(255,255,255,0.2)", width=1.5)),
+        hovertemplate="<b>%{y}</b><br>Return: %{x:+.2f}%<extra></extra>",
+        showlegend=False, cliponaxis=False,
+    ))
+
+    # ── annotations for labels (positioned with pixel offset, never overlap) ──
+    max_abs = max(abs(p) for p in pnl_pcts) if pnl_pcts else 10
+    for i, (sym, pct, dc) in enumerate(zip(symbols, pnl_pcts, dot_c)):
+        # Always place label to the right of the dot with pixel offset
+        fig.add_annotation(
+            x=pct, y=sym,
+            text=f"<b>{pct:+.1f}%</b>",
+            showarrow=False,
+            xanchor="left",
+            xshift=16,  # 16px to the right of dot
+            font=dict(color=dc, size=11, family="JetBrains Mono, monospace"),
+        )
+
+    # ── zero baseline ──
+    fig.add_vline(x=0, line_color="rgba(255,255,255,0.1)", line_width=1)
+
+    chart_height = max(180, len(rows) * 60)
+    pad = max_abs * 0.5
+
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Outfit, sans-serif", color="#94A3B8"),
+        height=chart_height,
+        margin=dict(l=10, r=90, t=15, b=25),
+        showlegend=False,
+        hovermode="y unified",
+        dragmode="pan",
+        uirevision="pnl_chart",
+        hoverlabel=dict(bgcolor="#1E293B", font_size=12, font_family="JetBrains Mono, monospace"),
+        xaxis=dict(
+            showgrid=True, gridcolor="rgba(51,65,85,0.2)", griddash="dash",
+            zeroline=False, ticksuffix="%",
+            tickfont=dict(color="#475569", size=9, family="JetBrains Mono, monospace"),
+            showline=False,
+            range=[min(min(pnl_pcts), 0) - pad, max(max(pnl_pcts), 0) + pad],
+        ),
+        yaxis=dict(
+            showgrid=False, zeroline=False,
+            tickfont=dict(color="#CBD5E1", size=11, family="Outfit, sans-serif"),
+            showline=False,
+            categoryorder="array", categoryarray=symbols,
+            automargin=True,
+        ),
+    )
     return fig
+
+
 
 
 def create_sector_chart(sector_data):
