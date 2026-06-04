@@ -92,12 +92,12 @@ def generate_market_brief(llm, nifty_data: dict, sensex_data: dict,
         nifty_str = (
             f"Nifty 50: {nifty_data.get('current_price', 'N/A')} "
             f"({nifty_data.get('change_pct', 0):+.2f}%)"
-            if nifty_data else "Nifty 50: Data unavailable"
+            if nifty_data and "error" not in nifty_data else "Nifty 50: Data unavailable"
         )
         sensex_str = (
             f"Sensex: {sensex_data.get('current_price', 'N/A')} "
             f"({sensex_data.get('change_pct', 0):+.2f}%)"
-            if sensex_data else "Sensex: Data unavailable"
+            if sensex_data and "error" not in sensex_data else "Sensex: Data unavailable"
         )
 
         sector_str = "\n".join([
