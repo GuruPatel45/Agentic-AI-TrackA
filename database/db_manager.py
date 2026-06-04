@@ -21,59 +21,72 @@ def get_connection() -> sqlite3.Connection:
 
 def initialize_database():
     """Create all required tables if they don't exist."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        # Delete corrupted database if it exists
+        if os.path.exists(settings.DB_PATH):
+            try:
+                test_conn = sqlite3.connect(settings.DB_PATH, check_same_thread=False)
+                test_conn.execute("SELECT 1")
+                test_conn.close()
+            except sqlite3.DatabaseError:
+                os.remove(settings.DB_PATH)
+        
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    # Watchlist table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS watchlist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL UNIQUE,
-            company_name TEXT,
-            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            notes TEXT
-        )
-    """)
+        # Watchlist table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL UNIQUE,
+                company_name TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT
+            )
+        """)
 
-    # Portfolio table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS portfolio (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            company_name TEXT,
-            buy_price REAL NOT NULL,
-            quantity INTEGER NOT NULL,
-            buy_date DATE NOT NULL,
-            notes TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Portfolio table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                company_name TEXT,
+                buy_price REAL NOT NULL,
+                quantity INTEGER NOT NULL,
+                buy_date DATE NOT NULL,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    # Price alerts table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS price_alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            target_price REAL NOT NULL,
-            alert_type TEXT NOT NULL,  -- 'above' or 'below'
-            is_active INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Price alerts table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS price_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                target_price REAL NOT NULL,
+                alert_type TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    # Analysis history table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS analysis_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            analysis_type TEXT,
-            result_json TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        # Analysis history table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS analysis_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                analysis_type TEXT,
+                result_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Database initialization error: {e}")
+        raise
 
 
 # ── Watchlist Operations ──────────────────────────────────────
