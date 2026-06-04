@@ -8,6 +8,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from cachetools import TTLCache
@@ -15,6 +16,18 @@ from typing import Optional, List
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Create a robust session to bypass cloud blocking
+_session = requests.Session()
+_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+})
+
+try:
+    import os
+    yf.set_tz_cache_location(os.path.join(os.getcwd(), ".yf_cache"))
+except Exception:
+    pass
 
 _cache = TTLCache(maxsize=200, ttl=settings.CACHE_TTL_SECONDS)
 
@@ -43,7 +56,7 @@ def fetch_with_retry(symbol, retries=2):
     for i in range(retries):
         for period in periods:
             try:
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(symbol, session=_session)
                 hist = ticker.history(period=period)
                 if not hist.empty:
                     return ticker, hist
@@ -70,7 +83,7 @@ def batch_fetch_prices(symbols: List[str]) -> dict:
 
     def _fetch_single(sym):
         try:
-            ticker = yf.Ticker(sym)
+            ticker = yf.Ticker(sym, session=_session)
             # Fetch 5 days to ensure we have at least 2 points for change calculation
             hist = ticker.history(period="5d", interval="1d")
             
@@ -148,7 +161,7 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
             except:
                 pass # Fallback to YFinance if NSE site is down
 
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(symbol, session=_session)
         if target_date:
             # Fallback YFinance Logic for non-NSE stocks or if nsepython fails
             try:
@@ -301,7 +314,7 @@ def get_historical_data(symbol: str, period: str = "6mo", interval: str = "1d") 
 
     try:
 
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(symbol, session=_session)
 
         df = ticker.history(period=period, interval=interval)
 
@@ -380,7 +393,7 @@ def get_fundamental_analysis(symbol: str) -> dict:
 
     try:
 
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(symbol, session=_session)
 
         # ticker.info has full fundamental data (fast_info is too limited)
         try:
