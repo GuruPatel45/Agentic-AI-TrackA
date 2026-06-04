@@ -51,6 +51,7 @@ def show():
             "delta_type": nifty_dt
         })
     else:
+        st.error(f"DEBUG NIFTY: {nifty}")
         metrics.append({"label": "🔵 Nifty 50", "value": "N/A", "delta_text": "—", "delta_type": "neu"})
 
     # Sensex
