@@ -490,36 +490,124 @@ def calculate_portfolio_risk(holdings: list, current_prices: dict) -> dict:
 # ─────────────────────────────────────────────────────────────
 
 @_get_st_cache_data()(ttl=300)
-def get_top_movers() -> dict:
-    """Get top gainers and losers from popular Indian stocks — parallel fetch."""
-    cache_key = "top_movers"
+def get_top_movers(target_date: str = None) -> dict:
+    """Get top gainers and losers from popular Indian stocks — parallel fetch or historical."""
+    cache_key = f"top_movers_{target_date}"
     if cache_key in _signal_cache:
         return _signal_cache[cache_key]
 
     from config.settings import settings
-    stocks_to_check = list(settings.POPULAR_STOCKS.keys())
+    symbols = list(settings.POPULAR_STOCKS.keys())
 
-    # Batch fetch all at once
-    all_prices = batch_fetch_prices(stocks_to_check)
+    if not target_date:
+        try:
+            from nsepython import nse_get_top_gainers, nse_get_top_losers
+            g_df = nse_get_top_gainers()
+            l_df = nse_get_top_losers()
+            
+            gainers = []
+            losers = []
+            
+            if not g_df.empty:
+                for _, row in g_df.head(10).iterrows():
+                    gainers.append({
+                        "symbol": row["symbol"],
+                        "full_symbol": f"{row['symbol']}.NS",
+                        "company": row.get("companyName", row["symbol"])[:22],
+                        "price": round(float(row["lastPrice"]), 2),
+                        "change_pct": round(float(row["pChange"]), 2),
+                        "change": round(float(row["change"]), 2),
+                    })
+            
+            if not l_df.empty:
+                for _, row in l_df.head(10).iterrows():
+                    losers.append({
+                        "symbol": row["symbol"],
+                        "full_symbol": f"{row['symbol']}.NS",
+                        "company": row.get("companyName", row["symbol"])[:22],
+                        "price": round(float(row["lastPrice"]), 2),
+                        "change_pct": round(float(row["pChange"]), 2),
+                        "change": round(float(row["change"]), 2),
+                    })
+            
+            if gainers or losers:
+                result = {"gainers": gainers, "losers": losers, "all": gainers + losers, "source": "NSE India Official"}
+                _signal_cache[cache_key] = result
+                return result
+        except Exception:
+            pass # Fallback to existing logic if NSE API fails
 
-    movers = []
-    for symbol, data in all_prices.items():
-        if "error" not in data:
-            movers.append({
-                "symbol": symbol.replace(".NS", ""),
-                "full_symbol": symbol,
-                "company": data.get("company_name", symbol)[:22],
-                "price": data.get("current_price", 0),
-                "change_pct": data.get("change_pct", 0),
-                "change": data.get("change", 0),
-            })
+    from config.settings import settings
+    symbols = list(settings.POPULAR_STOCKS.keys())
+
+    if target_date:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        import pandas as pd
+        
+        try:
+            target_dt = datetime.strptime(target_date, "%d-%m-%Y")
+        except ValueError:
+            target_dt = datetime.strptime(target_date, "%Y-%m-%d")
+            
+        start_dt = (target_dt - timedelta(days=10)).strftime("%Y-%m-%d")
+        end_dt = (target_dt + timedelta(days=2)).strftime("%Y-%m-%d")
+        
+        # Batch fetch historical data
+        df = yf.download(symbols, start=start_dt, end=end_dt, group_by='ticker', progress=False)
+        movers = []
+        
+        for sym in symbols:
+            try:
+                if sym in df.columns.levels[0]:
+                    sym_data = df[sym].dropna(subset=["Close"])
+                else:
+                    sym_data = df.dropna(subset=["Close"])
+                if sym_data.empty: continue
+                
+                target_ts = pd.Timestamp(target_dt).tz_localize(sym_data.index.tz) if sym_data.index.tz else pd.Timestamp(target_dt)
+                past_data = sym_data[sym_data.index <= target_ts]
+                
+                if len(past_data) >= 2:
+                    current_price = float(past_data["Close"].iloc[-1])
+                    prev_price = float(past_data["Close"].iloc[-2])
+                    change = current_price - prev_price
+                    change_pct = (change / prev_price) * 100
+                    
+                    movers.append({
+                        "symbol": sym.replace(".NS", ""),
+                        "full_symbol": sym,
+                        "company": settings.POPULAR_STOCKS.get(sym, sym)[:22],
+                        "price": round(current_price, 2),
+                        "change_pct": round(change_pct, 2),
+                        "change": round(change, 2),
+                    })
+            except Exception:
+                pass
+    else:
+        # Fallback Batch fetch
+        from tools.stock_tools import batch_fetch_prices
+        all_prices = batch_fetch_prices(symbols)
+        movers = []
+        for symbol, data in all_prices.items():
+            if "error" not in data:
+                movers.append({
+                    "symbol": symbol.replace(".NS", ""),
+                    "full_symbol": symbol,
+                    "company": data.get("company_name", symbol)[:22],
+                    "price": data.get("current_price", 0),
+                    "change_pct": data.get("change_pct", 0),
+                    "change": data.get("change", 0),
+                })
 
     movers.sort(key=lambda x: x["change_pct"], reverse=True)
-    gainers = [m for m in movers if m["change_pct"] > 0][:5]
-    losers  = [m for m in movers if m["change_pct"] < 0][-5:]
+    gainers = [m for m in movers if m["change_pct"] > 0][:10]
+    losers  = [m for m in movers if m["change_pct"] < 0][-10:]
     losers.reverse()
 
-    result = {"gainers": gainers, "losers": losers, "all": movers}
+    result = {"gainers": gainers, "losers": losers, "all": movers, "source": "Yahoo Finance (Popular Subset)"}
+    _signal_cache[cache_key] = result
+    return result
     _signal_cache[cache_key] = result
     return result
 
