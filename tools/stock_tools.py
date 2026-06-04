@@ -244,9 +244,12 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
 
                 try:
                     # 2. Try Google Finance Scraper (Works on Streamlit Cloud)
-                    import urllib.request, re
+                    import urllib.request, re, ssl
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
                     req = urllib.request.Request('https://www.google.com/finance/quote/NIFTY_50:INDEXNSE', headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-                    html = urllib.request.urlopen(req, timeout=5).read().decode('utf-8')
+                    html = urllib.request.urlopen(req, timeout=5, context=ctx).read().decode('utf-8')
                     match = re.search(r'class="YMlKec fxKbKc"[^>]*>([^<]+)<', html)
                     if match:
                         actual_price = float(match.group(1).replace(",", "").replace("₹", ""))
@@ -272,7 +275,12 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
                     logger.warning(f"Google Finance fetch failed: {e}")
 
             # Fallback to yfinance if nsepython fails or if it's not an index
-            hist = ticker.history(period="3mo")
+            try:
+                hist = ticker.history(period="3mo")
+            except Exception as e:
+                import pandas as pd
+                logger.warning(f"yfinance history failed for {symbol}: {e}")
+                hist = pd.DataFrame()
         
         # --- PRIMARY DATA FETCH (FAST) ---
         current_price = prev_price = day_high = day_low = open_price = None
@@ -361,10 +369,10 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
         _cache[key] = result
         return result
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"get_stock_price({symbol}) failed: {e}")
-        return {"symbol": symbol, "error": str(e)}
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"get_stock_price({symbol}) failed: {e}\n{tb}")
+        return {"symbol": symbol, "error": tb}
 
 
 
