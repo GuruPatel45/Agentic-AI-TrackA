@@ -210,6 +210,37 @@ def get_stock_price(symbol: str, target_date: str = None) -> dict:
             except Exception as e:
                 return {"error": f"EXCHANGE_DATA_UNAVAILABLE: {e}"}
         else:
+            # For live requests, try to fetch Nifty from nsepython FIRST because yfinance fails often on Streamlit Cloud.
+            if symbol == "^NSEI":
+                try:
+                    from nsepython import nse_get_index_quote
+                    idx_data = nse_get_index_quote("NIFTY 50")
+                    if idx_data and "last" in idx_data:
+                        actual_price = float(str(idx_data["last"]).replace(",", ""))
+                        prev_close = float(str(idx_data["previousClose"]).replace(",", ""))
+                        change = actual_price - prev_close
+                        change_pct = (change / prev_close * 100) if prev_close else 0
+                        res_dict = {
+                            "current_price": actual_price,
+                            "open_price": float(str(idx_data.get("open", actual_price)).replace(",", "")),
+                            "previous_close": prev_close,
+                            "change": change,
+                            "change_pct": change_pct,
+                            "symbol": symbol,
+                            "company_name": "Nifty 50",
+                            "52_week_high": float(str(idx_data.get("yearHigh", 0)).replace(",", "")) or "N/A",
+                            "52_week_low": float(str(idx_data.get("yearLow", 0)).replace(",", "")) or "N/A",
+                            "market_cap_str": "N/A",
+                            "sector": "Index",
+                            "last_closing_date": "Live",
+                            "search_context": "Index: Nifty 50"
+                        }
+                        _cache[key] = res_dict
+                        return res_dict
+                except Exception as e:
+                    logger.warning(f"nsepython index fetch failed for {symbol}: {e}")
+
+            # Fallback to yfinance if nsepython fails or if it's not an index
             hist = ticker.history(period="3mo")
         
         # --- PRIMARY DATA FETCH (FAST) ---
