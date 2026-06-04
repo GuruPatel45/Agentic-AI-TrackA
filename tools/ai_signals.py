@@ -554,7 +554,8 @@ def get_top_movers(target_date: str = None) -> dict:
         end_dt = (target_dt + timedelta(days=2)).strftime("%Y-%m-%d")
         
         # Batch fetch historical data
-        df = yf.download(symbols, start=start_dt, end=end_dt, group_by='ticker', progress=False)
+        from tools.stock_tools import _session
+        df = yf.download(symbols, start=start_dt, end=end_dt, group_by='ticker', progress=False, session=_session)
         movers = []
         
         for sym in symbols:
