@@ -8,6 +8,11 @@ import pandas as pd
 import time
 import os
 import logging
+import warnings
+
+# 🔥 Suppress DuckDuckGo and other noisy warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*backend='api'.*")
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +38,7 @@ from database.db_manager import (
 from tools.stock_tools import (
     get_stock_price, get_historical_data, calculate_sip,
     calculate_tax_implications, get_fundamental_analysis,
-
+    batch_fetch_prices
 )
 from tools.news_tools import get_news_with_sentiment
 from tools.ai_signals import get_trading_signal, get_market_mood, calculate_portfolio_risk, get_top_movers, get_sector_heatmap, get_market_breadth, get_52week_pulse
@@ -49,7 +54,8 @@ from utils import is_market_open, validate_symbol, format_inr, export_analysis_t
 import streamlit.components.v1 as components
 
 def render_interactive_chart(symbol, height=500, key_prefix="chart"):
-    c_hdr, c_int, c_ind = st.columns([2.5, 1.0, 1.5])
+    # On mobile the col_chart is already full-width, controls stack naturally
+    c_hdr, c_int, c_ind = st.columns([2, 1, 1.5])
     with c_hdr:
         sec_hdr(f"{symbol} — Real-Time Interactive Chart", "blue")
     with c_int:
@@ -84,7 +90,19 @@ def render_interactive_chart(symbol, height=500, key_prefix="chart"):
             if indicators_opt:
                 df_chart = calculate_technical_indicators(df_chart)
             fig = create_interactive_plotly_chart(df_chart, symbol, indicators=indicators_opt)
-            st.plotly_chart(fig, use_container_width=True, key=f"plotly_{key_prefix}_{symbol}_{interval_opt}")
+            # Apply dragmode=pan and uirevision so state persists across rerenders
+            fig.update_layout(dragmode="pan", uirevision=f"{symbol}_{interval_opt}")
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                key=f"plotly_{key_prefix}_{symbol}_{interval_opt}",
+                config={
+                    "displayModeBar": False,
+                    "scrollZoom": True,
+                    "doubleClick": "reset+autosize",
+                    "responsive": True,
+                }
+            )
         else:
             st.warning("⚠️ No data available for the selected interval.")
 
@@ -95,652 +113,43 @@ os.makedirs("data", exist_ok=True)
 # ═══════════════════════════════════════════════════════════
 #  MASTER CSS
 # ═══════════════════════════════════════════════════════════
-st.markdown("""
-<style>
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap");
+from ui.styles import get_responsive_css
+st.markdown(get_responsive_css(), unsafe_allow_html=True)
 
-/* ── DESIGN TOKENS ── */
-:root {
-  --bg:        #050810;
-  --bg2:       #080C16;
-  --bg3:       #0C1220;
-  --surface:   #0F1729;
-  --surface2:  #141E34;
-  --surface3:  #192540;
-  --border:    #1C2D4F;
-  --border2:   #253D68;
-  --border3:   #2E4D82;
-  --blue:      #3B82F6;
-  --blue2:     #60A5FA;
-  --blue3:     #1D4ED8;
-  --indigo:    #6366F1;
-  --cyan:      #06B6D4;
-  --teal:      #14B8A6;
-  --green:     #10B981;
-  --green2:    #34D399;
-  --lime:      #84CC16;
-  --red:       #EF4444;
-  --red2:      #F87171;
-  --orange:    #F97316;
-  --amber:     #F59E0B;
-  --gold:      #FBBF24;
-  --purple:    #A855F7;
-  --pink:      #EC4899;
-  --text:      #F1F5FF;
-  --text2:     #94A3C8;
-  --text3:     #4B6494;
-  --text4:     #2E3F62;
-  --r8:        8px;
-  --r12:       12px;
-  --r16:       16px;
-  --r20:       20px;
-}
-
-/* ── BASE ── */
-*, *::before, *::after { box-sizing: border-box; }
-* { font-family: "Space Grotesk", sans-serif !important; }
-html, body, .stApp { background: var(--bg) !important; color: var(--text) !important; }
-.main .block-container { padding: 1.5rem 2rem !important; max-width: 100% !important; }
-
-/* ── SUBTLE NOISE TEXTURE OVERLAY ── */
-.stApp::after {
-  content: '';
-  position: fixed; inset: 0; pointer-events: none; z-index: 0;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 200px 200px;
-  opacity: 0.4;
-}
-
-/* ── SIDEBAR ── */
-[data-testid="stSidebar"] {
-  background: linear-gradient(160deg, #06091A 0%, #040710 60%, #050912 100%) !important;
-  border-right: 1px solid var(--border) !important;
-  box-shadow: 4px 0 40px rgba(0,0,0,0.6) !important;
-}
-[data-testid="stSidebar"] > div:first-child {
-  padding: 0 0.65rem 1.5rem !important;
-  overflow: hidden !important;
-}
-section[data-testid="stSidebar"] > div { padding-top: 0 !important; overflow: hidden !important; }
-[data-testid="stSidebar"] > div:first-child > div:first-child {
-  height: 0 !important; min-height: 0 !important;
-  overflow: visible !important; position: relative !important;
-  padding: 0 !important; margin: 0 !important;
-}
-[data-testid="stSidebar"] > div:first-child > div:first-child > div {
-  position: absolute !important; top: 0.5rem !important; right: -0.1rem !important; z-index: 9999 !important;
-}
-
-/* NAV radio */
-[data-testid="stSidebar"] .stRadio > label { display: none !important; }
-[data-testid="stSidebar"] .stRadio > div { gap: 1px !important; }
-[data-testid="stSidebar"] .stRadio [data-baseweb="radio"] { width:100% !important; padding:0 !important; margin:0 !important; }
-[data-testid="stSidebar"] .stRadio [data-baseweb="radio"] > div:first-child { display:none !important; }
-[data-testid="stSidebar"] .stRadio [data-baseweb="radio"] > div:last-child {
-  background: transparent !important;
-  border-radius: var(--r8) !important;
-  padding: 0.17rem 0.8rem !important;
-  cursor: pointer !important; width: 100% !important;
-  transition: all 0.15s ease !important;
-  color: var(--text3) !important;
-  font-size: 0.83rem !important; font-weight: 500 !important;
-  border: 1px solid transparent !important;
-  letter-spacing: 0.01em !important;
-}
-[data-testid="stSidebar"] .stRadio [data-baseweb="radio"]:hover > div:last-child {
-  background: rgba(59,130,246,0.08) !important;
-  color: var(--text2) !important; border-color: rgba(59,130,246,0.2) !important;
-}
-[data-testid="stSidebar"] .stRadio [data-baseweb="radio"][aria-checked="true"] > div:last-child {
-  background: linear-gradient(135deg, rgba(59,130,246,0.18), rgba(99,102,241,0.1)) !important;
-  color: var(--text) !important; font-weight: 600 !important;
-  border-color: rgba(59,130,246,0.4) !important;
-  box-shadow: 0 2px 20px rgba(59,130,246,0.2), inset 0 0 0 1px rgba(59,130,246,0.15) !important;
-}
-
-/* ── METRIC CARDS ── */
-[data-testid="metric-container"] {
-  background: linear-gradient(145deg, var(--surface) 0%, var(--bg3) 100%) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: var(--r16) !important;
-  padding: 1.1rem 1.3rem 1rem !important;
-  transition: all 0.22s cubic-bezier(0.4,0,0.2,1) !important;
-  position: relative !important; overflow: hidden !important;
-}
-[data-testid="metric-container"]::before {
-  content: '' !important; position: absolute !important;
-  inset: 0 !important; border-radius: var(--r16) !important;
-  background: linear-gradient(135deg, rgba(59,130,246,0.06) 0%, transparent 60%) !important;
-  pointer-events: none !important;
-}
-[data-testid="metric-container"]:hover {
-  border-color: rgba(59,130,246,0.5) !important;
-  transform: translateY(-3px) !important;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(59,130,246,0.2) !important;
-}
-[data-testid="stMetricValue"] {
-  font-family: "Outfit", sans-serif !important;
-  font-size: 1.55rem !important; font-weight: 800 !important;
-  color: var(--text) !important; letter-spacing: -0.6px !important; line-height: 1.1 !important;
-}
-[data-testid="stMetricLabel"] {
-  font-family: "JetBrains Mono", monospace !important;
-  font-size: 0.6rem !important; color: var(--text3) !important;
-  text-transform: uppercase !important; letter-spacing: 0.14em !important; font-weight: 500 !important;
-}
-[data-testid="stMetricDelta"] { font-size: 0.78rem !important; font-weight: 700 !important; }
-[data-testid="stMetricDeltaIcon"] { display: none !important; }
-
-/* ── FIN-CARD ── */
-.fin-card {
-  background: linear-gradient(145deg, var(--surface) 0%, var(--bg3) 100%);
-  border: 1px solid var(--border);
-  border-radius: var(--r16); padding: 1.2rem 1.4rem;
-  position: relative; overflow: hidden;
-  transition: all 0.22s cubic-bezier(0.4,0,0.2,1);
-}
-.fin-card::before {
-  content: ''; position: absolute; inset: 0; border-radius: var(--r16);
-  background: linear-gradient(135deg, rgba(59,130,246,0.05) 0%, transparent 70%);
-  pointer-events: none;
-}
-.fin-card:hover { border-color: var(--border2); box-shadow: 0 8px 40px rgba(0,0,0,0.4); transform: translateY(-2px); }
-
-.fin-card-glow-green { border-color: rgba(16,185,129,0.35) !important; background: linear-gradient(145deg, rgba(16,185,129,0.07), var(--bg3)) !important; }
-.fin-card-glow-red   { border-color: rgba(239,68,68,0.35) !important;   background: linear-gradient(145deg, rgba(239,68,68,0.07),   var(--bg3)) !important; }
-.fin-card-glow-blue  { border-color: rgba(59,130,246,0.35) !important;  background: linear-gradient(145deg, rgba(59,130,246,0.07),  var(--bg3)) !important; }
-.fin-card-glow-amber { border-color: rgba(245,158,11,0.35) !important;  background: linear-gradient(145deg, rgba(245,158,11,0.07),  var(--bg3)) !important; }
-
-/* ── GLASS CARD ── */
-.glass-card {
-  background: rgba(15,23,41,0.7);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: var(--r16); padding: 1.2rem 1.4rem;
-}
-
-/* ── SIGNAL CARDS ── */
-.signal-buy  { background: linear-gradient(145deg,rgba(5,46,22,0.9),rgba(6,78,59,0.5));  border:1px solid rgba(16,185,129,0.5);  border-radius:var(--r16); padding:1.2rem; text-align:center; }
-.signal-sell { background: linear-gradient(145deg,rgba(69,10,10,0.9),rgba(127,29,29,0.5)); border:1px solid rgba(239,68,68,0.5);   border-radius:var(--r16); padding:1.2rem; text-align:center; }
-.signal-hold { background: linear-gradient(145deg,rgba(69,49,0,0.9),rgba(120,53,15,0.5)); border:1px solid rgba(245,158,11,0.5);  border-radius:var(--r16); padding:1.2rem; text-align:center; }
-
-/* ── TICKER CARD ── */
-.ticker-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r12); padding: 0.65rem 1rem; margin: 4px 0;
-  display: flex; align-items: center; justify-content: space-between;
-  transition: all 0.16s ease; cursor: default;
-  position: relative; overflow: hidden;
-}
-.ticker-card::after {
-  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-  width: 3px; border-radius: 3px 0 0 3px;
-  background: transparent; transition: background 0.16s;
-}
-.ticker-card:hover { border-color: var(--border2); background: var(--surface2); transform: translateX(4px); }
-.ticker-card.gain::after { background: var(--green); }
-.ticker-card.loss::after { background: var(--red); }
-.ticker-card.gain:hover { border-color: rgba(16,185,129,0.4); }
-.ticker-card.loss:hover { border-color: rgba(239,68,68,0.4); }
-
-/* ── SECTION HEADER ── */
-.sec-hdr {
-  display: flex; align-items: center; gap: 10px;
-  margin: 0.85rem 0 0.65rem;
-}
-.sec-hdr-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--blue); flex-shrink: 0;
-  box-shadow: 0 0 12px rgba(59,130,246,0.8);
-}
-.sec-hdr-dot.green { background: var(--green); box-shadow: 0 0 12px rgba(16,185,129,0.8); }
-.sec-hdr-dot.red   { background: var(--red);   box-shadow: 0 0 12px rgba(239,68,68,0.8); }
-.sec-hdr-dot.amber { background: var(--amber);  box-shadow: 0 0 12px rgba(245,158,11,0.8); }
-.sec-hdr-dot.purple{ background: var(--purple); box-shadow: 0 0 12px rgba(168,85,247,0.8); }
-.sec-hdr-label {
-  font-family: "Outfit", sans-serif !important;
-  font-size: 0.8rem; font-weight: 700; color: var(--text2);
-  text-transform: uppercase; letter-spacing: 0.08em;
-  flex: 1;
-}
-.sec-hdr::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); max-width: 200px; }
-
-/* ── PAGE HEADER ── */
-.pg-header { margin-bottom: 1.6rem; }
-.pg-eyebrow {
-  font-family: "JetBrains Mono", monospace !important;
-  font-size: 0.6rem; color: var(--blue2);
-  text-transform: uppercase; letter-spacing: 0.2em;
-  margin-bottom: 0.3rem; opacity: 0.9;
-}
-.pg-title {
-  font-family: "Outfit", sans-serif !important;
-  font-size: 2.1rem; font-weight: 800; color: var(--text);
-  letter-spacing: -0.8px; line-height: 1.1; margin-bottom: 0.3rem;
-}
-.pg-sub { font-size: 0.84rem; color: var(--text3); letter-spacing: 0.01em; }
-
-/* ── TABS ── */
-.stTabs [data-baseweb="tab-list"] {
-  background: var(--surface) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: var(--r12) !important;
-  padding: 4px !important; gap: 2px !important;
-  width: fit-content !important;
-}
-.stTabs [data-baseweb="tab"] {
-  border-radius: 9px !important; color: var(--text3) !important;
-  font-weight: 600 !important; font-size: 0.82rem !important;
-  padding: 0.42rem 1.1rem !important; background: transparent !important;
-  border: none !important; letter-spacing: 0.01em !important;
-}
-.stTabs [aria-selected="true"] {
-  background: linear-gradient(135deg, var(--blue3), var(--blue)) !important;
-  color: white !important; box-shadow: 0 2px 16px rgba(59,130,246,0.45) !important;
-}
-
-/* ── BUTTONS ── */
-.stButton > button {
-  border-radius: var(--r8) !important;
-  font-family: "Outfit", sans-serif !important;
-  font-weight: 700 !important; font-size: 0.8rem !important;
-  letter-spacing: 0.04em !important;
-  transition: all 0.18s cubic-bezier(0.4,0,0.2,1) !important;
-}
-.stButton > button[kind="primary"] {
-  background: linear-gradient(135deg, var(--blue3), var(--blue)) !important;
-  color: white !important; border: none !important;
-  box-shadow: 0 4px 20px rgba(59,130,246,0.4) !important;
-}
-.stButton > button[kind="primary"]:hover {
-  transform: translateY(-2px) !important;
-  box-shadow: 0 8px 30px rgba(59,130,246,0.55) !important;
-}
-.stButton > button[kind="secondary"] {
-  background: var(--surface2) !important; color: var(--text2) !important;
-  border: 1px solid var(--border) !important;
-}
-.stButton > button[kind="secondary"]:hover {
-  border-color: var(--border2) !important; color: var(--text) !important; background: var(--surface3) !important;
-}
-
-/* ── INPUTS ── */
-.stTextInput > div > div > input,
-.stNumberInput > div > div > input,
-.stTextArea > div > div > textarea,
-.stDateInput > div > div > input {
-  background: var(--surface) !important; border: 1px solid var(--border) !important;
-  border-radius: var(--r8) !important; color: var(--text) !important;
-  font-family: "Space Grotesk", sans-serif !important; font-size: 0.88rem !important;
-  transition: border-color 0.18s, box-shadow 0.18s !important;
-}
-.stTextInput > div > div > input:focus,
-.stNumberInput > div > div > input:focus,
-.stTextArea > div > div > textarea:focus {
-  border-color: var(--blue) !important;
-  box-shadow: 0 0 0 3px rgba(59,130,246,0.15) !important;
-}
-.stSelectbox > div > div {
-  background: var(--surface) !important; border: 1px solid var(--border) !important;
-  border-radius: var(--r8) !important; color: var(--text) !important;
-}
-.stTextInput label, .stNumberInput label, .stSelectbox label,
-.stTextArea label, .stDateInput label, .stCheckbox label, .stSlider label {
-  font-family: "JetBrains Mono", monospace !important;
-  font-size: 0.62rem !important; color: var(--text2) !important;
-  text-transform: uppercase !important; letter-spacing: 0.12em !important; font-weight: 500 !important;
-}
-
-/* ── RADIO ── */
-.stRadio > div { gap: 0.5rem !important; }
-.stRadio [data-baseweb="radio"] > div:first-child > div {
-  background: var(--surface) !important; border-color: var(--border2) !important;
-}
-.stRadio [data-baseweb="radio"][aria-checked="true"] > div:first-child > div {
-  background: var(--blue) !important; border-color: var(--blue) !important;
-}
-
-/* ── CHECKBOX ── */
-.stCheckbox > label > div[data-testid="stCheckbox"] {
-  background: var(--surface) !important; border-color: var(--border2) !important;
-  border-radius: 5px !important;
-}
-
-/* ── SLIDER ── */
-.stSlider > div > div > div > div { background: var(--blue) !important; }
-
-/* ── EXPANDER ── */
-.streamlit-expanderHeader {
-  background: var(--surface) !important; border: 1px solid var(--border) !important;
-  border-radius: var(--r12) !important; color: var(--text2) !important;
-  font-weight: 600 !important; font-size: 0.84rem !important;
-  padding: 0.7rem 1rem !important;
-}
-.streamlit-expanderHeader:hover { border-color: var(--border2) !important; color: var(--text) !important; }
-.streamlit-expanderContent {
-  background: var(--bg3) !important; border: 1px solid var(--border) !important;
-  border-top: none !important; border-radius: 0 0 var(--r12) var(--r12) !important; padding: 1rem !important;
-}
-
-/* ── DATAFRAME ── */
-.stDataFrame { border: 1px solid var(--border) !important; border-radius: var(--r12) !important; overflow: hidden !important; }
-[data-testid="stDataFrameResizable"] { border-radius: var(--r12) !important; }
-
-/* ── ALERTS ── */
-.stAlert { border-radius: var(--r8) !important; }
-.stInfo    { background: rgba(59,130,246,0.1) !important;  border: 1px solid rgba(59,130,246,0.3) !important;  color: var(--blue2) !important; }
-.stSuccess { background: rgba(16,185,129,0.1) !important;  border: 1px solid rgba(16,185,129,0.3) !important; }
-.stError   { background: rgba(239,68,68,0.1) !important;   border: 1px solid rgba(239,68,68,0.3) !important; }
-.stWarning { background: rgba(245,158,11,0.1) !important;  border: 1px solid rgba(245,158,11,0.3) !important; }
-
-/* ── CHAT (NEW PREMIUM) ── */
-/* Hide default streamlit chat elements on AI Chat page */
-.finsaarthi-chat-wrap [data-testid="stChatMessageContent"] { display: none !important; }
-
-/* Custom chat message cards */
-.chat-msg-wrap { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 1rem; animation: fadeSlide 0.3s ease; }
-.chat-msg-wrap.user-wrap { flex-direction: row-reverse; }
-@keyframes fadeSlide { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
-
-.chat-avatar {
-  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1rem; font-weight: 700;
-}
-.chat-avatar.ai-avatar {
-  background: linear-gradient(135deg, #3B82F6, #6366F1);
-  box-shadow: 0 4px 15px rgba(99,102,241,0.35);
-  color: white;
-}
-.chat-avatar.user-avatar {
-  background: linear-gradient(135deg, #0F1729, #192540);
-  border: 1px solid #253D68; color: #60A5FA;
-}
-
-.chat-bubble {
-  max-width: 75%; padding: 0.85rem 1.1rem;
-  border-radius: 16px; font-size: 0.875rem; line-height: 1.7;
-  position: relative;
-}
-.chat-bubble.ai-bubble {
-  background: linear-gradient(135deg, rgba(15,23,41,0.95), rgba(20,30,52,0.95));
-  border: 1px solid rgba(59,130,246,0.2);
-  border-top-left-radius: 4px;
-  color: #CBD5E9;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-}
-.chat-bubble.user-bubble {
-  background: linear-gradient(135deg, rgba(29,78,216,0.4), rgba(99,102,241,0.25));
-  border: 1px solid rgba(99,102,241,0.4);
-  border-top-right-radius: 4px;
-  color: #E2E8F7;
-  box-shadow: 0 4px 20px rgba(59,130,246,0.15);
-}
-.chat-bubble.ai-bubble::before {
-  content: ''; position: absolute; top: 10px; left: -8px;
-  border: 8px solid transparent;
-  border-right-color: rgba(59,130,246,0.2);
-  border-left: none;
-}
-.chat-bubble.user-bubble::before {
-  content: ''; position: absolute; top: 10px; right: -8px;
-  border: 8px solid transparent;
-  border-left-color: rgba(99,102,241,0.4);
-  border-right: none;
-}
-.chat-meta { font-size: 0.68rem; color: var(--text4); margin-top: 4px; }
-.user-wrap .chat-meta { text-align: right; }
-
-/* Chat input row - inline, always visible */
-.chat-input-row {
-  margin-top: 0.6rem;
-  margin-bottom: 0.4rem;
-}
-.chat-input-row .stTextInput > div > div > input {
-  background: rgba(15,23,41,0.95) !important;
-  border: 1px solid rgba(59,130,246,0.25) !important;
-  border-radius: 14px !important;
-  backdrop-filter: blur(10px);
-  color: var(--text) !important;
-  font-size: 0.9rem !important;
-  padding: 0.7rem 1.1rem !important;
-  height: 48px !important;
-}
-.chat-input-row .stTextInput > div > div > input:focus {
-  border-color: var(--blue) !important;
-  box-shadow: 0 0 0 3px rgba(59,130,246,0.15), 0 8px 30px rgba(0,0,0,0.3) !important;
-}
-.chat-input-row .stButton > button {
-  height: 48px !important;
-  border-radius: 14px !important;
-  font-size: 1.1rem !important;
-  background: linear-gradient(135deg, var(--blue3), var(--blue)) !important;
-  border: none !important;
-  box-shadow: 0 4px 20px rgba(59,130,246,0.4) !important;
-}
-
-/* Suggested questions new style */
-.suggest-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 1.2rem; }
-.suggest-card {
-  background: rgba(15,23,41,0.8); border: 1px solid rgba(28,45,79,0.8);
-  border-radius: 12px; padding: 0.7rem 0.9rem;
-  cursor: pointer; transition: all 0.2s ease;
-  display: flex; align-items: center; gap: 8px;
-}
-.suggest-card:hover {
-  border-color: rgba(59,130,246,0.5);
-  background: rgba(59,130,246,0.08);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(59,130,246,0.12);
-}
-.suggest-icon { font-size: 1.1rem; flex-shrink: 0; }
-.suggest-text { font-size: 0.75rem; font-weight: 500; color: var(--text2); line-height: 1.3; }
-
-/* Chat container scroll area */
-.chat-scroll-area {
-  height: calc(100vh - 360px); min-height: 400px; overflow-y: auto;
-  padding: 1rem; margin-bottom: 0.5rem;
-  border-radius: 16px;
-  border: 1px solid rgba(28,45,79,0.6);
-  background: rgba(8,12,22,0.6);
-  backdrop-filter: blur(8px);
-  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
-}
-.chat-scroll-area::-webkit-scrollbar { width: 4px; }
-.chat-scroll-area::-webkit-scrollbar-track { background: transparent; }
-.chat-scroll-area::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
-
-/* Typing indicator */
-.typing-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--blue2); animation: typingBounce 1.2s infinite ease-in-out; margin: 0 2px; }
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
-@keyframes typingBounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
-
-/* Chat status bar */
-.chat-status-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.6rem 1rem; border-radius: 12px;
-  background: rgba(15,23,41,0.7); border: 1px solid rgba(28,45,79,0.5);
-  margin-bottom: 1rem;
-}
-.chat-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green);
-  box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-
-/* Welcome state */
-.chat-welcome {
-  text-align: center; padding: 2.5rem 1rem;
-  display: flex; flex-direction: column; align-items: center; gap: 0.8rem;
-}
-.chat-welcome-icon {
-  width: 64px; height: 64px; border-radius: 50%;
-  background: linear-gradient(135deg, rgba(59,130,246,0.2), rgba(99,102,241,0.2));
-  border: 1px solid rgba(99,102,241,0.3);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1.8rem; margin-bottom: 0.5rem;
-  box-shadow: 0 8px 30px rgba(99,102,241,0.2);
-}
-.chat-welcome h3 { font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 1.2rem; color: var(--text); margin: 0; }
-.chat-welcome p { font-size: 0.82rem; color: var(--text3); margin: 0; max-width: 300px; }
-
-/* Quick questions old style - keep for compat */
-.quick-q-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 1rem; }
-.quick-q-item {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r8); padding: 0.5rem 0.85rem;
-  font-size: 0.76rem; font-weight: 500; color: var(--text2);
-  cursor: pointer; transition: all 0.15s;
-}
-.quick-q-item:hover { border-color: var(--blue); color: var(--text); background: rgba(59,130,246,0.1); }
-
-/* ── DOWNLOAD BUTTON ── */
-.stDownloadButton > button {
-  background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(20,184,166,0.1)) !important;
-  border: 1px solid rgba(16,185,129,0.4) !important;
-  color: var(--green2) !important; border-radius: var(--r8) !important;
-  font-family: "Outfit", sans-serif !important; font-weight: 700 !important;
-}
-.stDownloadButton > button:hover { background: rgba(16,185,129,0.25) !important; transform: translateY(-1px) !important; }
-
-/* ── SPINNER ── */
-.stSpinner > div { border-top-color: var(--blue) !important; }
-
-/* ── DIVIDER ── */
-hr {
-  border: none !important; height: 1px !important;
-  background: linear-gradient(90deg, transparent, var(--border) 25%, var(--border2) 50%, var(--border) 75%, transparent) !important;
-  margin: 1.1rem 0 !important;
-}
-
-/* ── MISC ── */
-#MainMenu, footer, header { visibility: hidden !important; }
-[data-testid="stDecoration"] { display: none !important; }
-.block-container { position: relative; z-index: 1; }
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
-
-/* ── BADGE ── */
-.badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 9px; border-radius: 6px;
-  font-family: "JetBrains Mono", monospace !important;
-  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em;
-}
-.badge-green { background: rgba(16,185,129,0.15); color: var(--green2); border: 1px solid rgba(16,185,129,0.3); }
-.badge-red   { background: rgba(239,68,68,0.15);  color: var(--red2);   border: 1px solid rgba(239,68,68,0.3); }
-.badge-blue  { background: rgba(59,130,246,0.15); color: var(--blue2);  border: 1px solid rgba(59,130,246,0.3); }
-.badge-amber { background: rgba(245,158,11,0.15); color: var(--gold);   border: 1px solid rgba(245,158,11,0.3); }
-.badge-live  { background: rgba(16,185,129,0.18); color: var(--green2); border: 1px solid rgba(16,185,129,0.4);
-               animation: blink-live 2s ease-in-out infinite; }
-@keyframes blink-live { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
-
-/* ── STAT ROW (fundamental kv) ── */
-.stat-row { display:flex; justify-content:space-between; align-items:center; padding:0.4rem 0; border-bottom:1px solid rgba(28,45,79,0.5); }
-.stat-row:last-child { border-bottom:none; }
-.stat-key { font-size:0.76rem; color:var(--text2); }
-.stat-val { font-family:"JetBrains Mono",monospace !important; font-size:0.8rem; font-weight:600; color:var(--text); }
-
-/* ── MOOD BARS ── */
-.mood-bar-outer { display:flex; gap:5px; align-items:flex-end; height:72px; margin:0.75rem 0 0.4rem; }
-.mood-bar-wrap  { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; }
-.mood-bar       { width:100%; border-radius:5px 5px 0 0; min-height:4px; transition:height 0.5s ease; }
-
-/* ── PROGRESS BAR ── */
-.prog-wrap { margin: 0.35rem 0; }
-.prog-label { display:flex; justify-content:space-between; font-size:0.74rem; color:var(--text2); margin-bottom:3px; }
-.prog-track { background:var(--border); border-radius:4px; height:6px; overflow:hidden; }
-.prog-fill  { height:100%; border-radius:4px; transition:width 0.5s ease; }
-
-/* ── NEWS CARD ── */
-.news-item {
-  background: var(--surface); border: 1px solid var(--border);
-  border-left: 3px solid transparent;
-  border-radius: 0 var(--r12) var(--r12) 0;
-  padding: 0.9rem 1.1rem; margin: 5px 0;
-  transition: all 0.16s ease;
-}
-.news-item:hover { border-color: var(--border2); background: var(--surface2); transform: translateX(4px); }
-.news-item.pos { border-left-color: var(--green); }
-.news-item.neg { border-left-color: var(--red); }
-.news-item.neu { border-left-color: var(--text3); }
-
-/* ── HOLDING ROW ── */
-.holding-hdr {
-  display: grid; grid-template-columns: 2fr 0.7fr 1fr 1fr 1.1fr 1.1fr 0.7fr;
-  padding: 0.5rem 1rem;
-  font-family: "JetBrains Mono", monospace !important;
-  font-size: 0.58rem; color: var(--text3);
-  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
-  border-bottom: 1px solid var(--border);
-}
-.holding-row {
-  display: grid; grid-template-columns: 2fr 0.7fr 1fr 1fr 1.1fr 1.1fr 0.7fr;
-  align-items: center; padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(28,45,79,0.4);
-  transition: background 0.15s;
-}
-.holding-row:hover { background: rgba(59,130,246,0.04); }
-.holding-row:last-child { border-bottom: none; }
-
-/* ── WATCHLIST ROW ── */
-.wl-hdr {
-  display: grid; grid-template-columns: 2fr 1.5fr 1fr 1.8fr 1.2fr 0.6fr;
-  padding: 0.5rem 1rem;
-  font-family: "JetBrains Mono", monospace !important;
-  font-size: 0.58rem; color: var(--text3);
-  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
-  border-bottom: 1px solid var(--border);
-}
-.wl-row {
-  display: grid; grid-template-columns: 2fr 1.5fr 1fr 1.8fr 1.2fr 0.6fr;
-  align-items: center; padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(28,45,79,0.35);
-  transition: background 0.15s;
-}
-.wl-row:hover { background: rgba(59,130,246,0.03); }
-.wl-row:last-child { border-bottom: none; }
-
-
-/* ── INDEX PILL (top banner) ── */
-.idx-pill {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r12); padding: 0.85rem 1.3rem;
-  transition: all 0.2s; cursor: default;
-  position: relative; overflow: hidden;
-}
-.idx-pill::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-  background: linear-gradient(90deg, transparent, var(--blue), var(--cyan), transparent);
-  opacity: 0.7;
-}
-.idx-pill:hover { border-color: var(--border2); transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.35); }
-.idx-pill.green-top::before { background: linear-gradient(90deg, transparent, var(--green), var(--teal), transparent); }
-.idx-pill.red-top::before   { background: linear-gradient(90deg, transparent, var(--red), var(--orange), transparent); }
-
-</style>
-""", unsafe_allow_html=True)
 
 # ── Session State ─────────────────────────────────────────
-for key, default in [
-    ("agent", None), ("chat_history", []),
-    ("agent_error", None), ("selected_symbol", "BTC-USD"),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+from ui.state_manager import initialize_session_state
+initialize_session_state()
 
-query_params = st.query_params
-if "symbol" in query_params:
-    st.session_state["selected_symbol"] = query_params["symbol"]
-if "page" in query_params:
-    st.session_state["nav_page"] = query_params["page"]
-    st.query_params.clear()
-
+# ── GLOBAL URL PARAMETER HANDLER ──────────────────────────
+# This only runs when an explicit action (like Delete) is triggered via URL
+if "del_wl" in st.query_params:
+    try:
+        # Support both list-style and string-style parameters
+        target = st.query_params.get_all("del_wl")[0] if hasattr(st.query_params, "get_all") else st.query_params["del_wl"]
+        if target:
+            from database.db_manager import remove_from_watchlist as _rfw
+            res = _rfw(target)
+            if res.get("success"):
+                st.toast(f"🗑️ Removed {target} from watchlist")
+            else:
+                st.toast(f"⚠️ Failed to remove {target}: {res.get('message')}")
+        
+        # Force navigation to Watchlist ONLY for this specific deletion rerun
+        st.session_state.nav_page = "Watchlist"
+        
+        # Clear URL params and rerun to clean the browser address bar
+        st.query_params.clear()
+        time.sleep(0.1)
+        st.rerun()
+    except Exception as e:
+        st.toast(f"❌ URL Action Error: {str(e)}")
 
 def get_agent():
-    if st.session_state.agent is None:
+    # Always re-initialize in development to pick up code changes
+    # or use a version-based check if performance is a concern.
+    # For now, we force re-init if the session is active to fix stale logic issues.
+    if st.session_state.agent is None or os.environ.get("FORCE_AGENT_RELOAD", "true") == "true":
         try:
             st.session_state.agent = FinancialAgent()
             st.session_state.agent_error = None
@@ -750,215 +159,171 @@ def get_agent():
 
 
 # ─── HELPER COMPONENTS ────────────────────────────────────
-def page_header(eyebrow, title, sub):
-    st.markdown(f"""
-    <div class="pg-header">
-      <div class="pg-eyebrow">⬡ &nbsp;{eyebrow}</div>
-      <div class="pg-title">{title}</div>
-      <div class="pg-sub">{sub}</div>
-    </div>""", unsafe_allow_html=True)
-
-
-def sec_hdr(label, dot_color="blue"):
-    st.markdown(f"""
-    <div class="sec-hdr">
-      <div class="sec-hdr-dot {dot_color}"></div>
-      <div class="sec-hdr-label">{label}</div>
-    </div>""", unsafe_allow_html=True)
-
-
-def ticker_card(symbol, company, price, change_pct, rank=None):
-    arrow  = "▲" if change_pct >= 0 else "▼"
-    cc     = "#10B981" if change_pct >= 0 else "#EF4444"
-    cls    = "gain" if change_pct >= 0 else "loss"
-    rank_html = f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.65rem;color:var(--text4);margin-right:10px;">#{rank}</div>' if rank else ''
-
-    st.markdown(f"""
-    <div class="ticker-card {cls}" style="cursor:default;">
-      {rank_html}
-      <div style="flex:1;">
-        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:0.85rem;color:var(--text);line-height:1.2;">{symbol.replace('.NS','')}</div>
-        <div style="font-size:0.68rem;color:var(--text3);margin-top:1px;">{company[:22]}</div>
-      </div>
-      <div style="text-align:right;">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:0.84rem;font-weight:600;color:var(--text);">₹{price:,.1f}</div>
-        <div style="color:{cc};font-weight:700;font-size:0.78rem;margin-top:1px;">{arrow} {abs(change_pct):.2f}%</div>
-      </div>
-    </div>""", unsafe_allow_html=True)
-
-
-def prog_bar(label, value_str, pct, color="#3B82F6"):
-    st.markdown(f"""
-    <div class="prog-wrap">
-      <div class="prog-label"><span>{label}</span><span style="font-family:'JetBrains Mono',monospace;font-size:0.72rem;">{value_str}</span></div>
-      <div class="prog-track"><div class="prog-fill" style="width:{min(pct,100)}%;background:{color};"></div></div>
-    </div>""", unsafe_allow_html=True)
-
-
-def stat_row(key, val, val_color=None):
-    col_style = f"color:{val_color};" if val_color else ""
-    st.markdown(f"""
-    <div class="stat-row">
-      <span class="stat-key">{key}</span>
-      <span class="stat-val" style="{col_style}">{val}</span>
-    </div>""", unsafe_allow_html=True)
+from ui.components import page_header, sec_hdr, ticker_card, prog_bar, stat_row
 
 
 # ═══════════════════════════════════════════════════════════
 #  SIDEBAR
 # ═══════════════════════════════════════════════════════════
 with st.sidebar:
-    market_info = is_market_open()
-    is_open     = "Open" in market_info.get("status", "")
-    s_color     = "#10B981" if is_open else "#EF4444"
-    s_dot       = "🟢" if is_open else "🔴"
-    s_label     = "Market Open" if is_open else "Market Closed"
-
     st.markdown(f"""
-    <style>@keyframes pulse-dot{{0%,100%{{box-shadow:0 0 0 0 {s_color}66}}50%{{box-shadow:0 0 0 5px transparent}}}}</style>
-    <div style="padding:1.5rem 0.3rem 0.85rem; text-align:center;">
+    <div style="padding:0rem 0.2rem 1rem; display:flex; align-items:center; justify-content:center; gap:12px;">
       <!-- Logo -->
-      <div style="display:inline-flex;align-items:center;justify-content:center;
-                  width:48px;height:48px;border-radius:14px;
-                  background:linear-gradient(135deg,#1D4ED8,#3B82F6,#06B6D4);
-                  box-shadow:0 0 30px rgba(59,130,246,0.55), 0 0 60px rgba(6,182,212,0.2);
-                  margin-bottom:0.75rem; position:relative;">
-        <span style="font-size:1.4rem;filter:drop-shadow(0 0 6px rgba(255,255,255,0.3));">📈</span>
+      <div style="font-size:2.2rem; filter:drop-shadow(0 0 10px rgba(14,165,233,0.5));">🧊</div>
+      <div style="text-align:left;">
+        <div style="font-family:'Inter',sans-serif;font-size:1.4rem;font-weight:700;color:#FFF;line-height:1;">FinSaarthi</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:0.55rem;color:#8892B0;letter-spacing:0.05em;margin-top:4px;">AI INTELLIGENCE</div>
       </div>
-      <div style="font-family:'Outfit',sans-serif;font-size:1.2rem;font-weight:800;
-                  color:#F1F5FF;letter-spacing:-0.4px;">FinSaarthi</div>
-      <div style="font-family:'JetBrains Mono',monospace;font-size:0.55rem;color:#2E3F62;
-                  text-transform:uppercase;letter-spacing:0.18em;margin-top:3px;">AI · Stock Intelligence · v2.0</div>
     </div>
+    """, unsafe_allow_html=True)
 
-    <!-- Market Status Pill -->
-    <div style="background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2);
-                border-radius:10px;padding:0.48rem 0.9rem;margin:0 0.1rem 0.85rem;
-                display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;align-items:center;gap:7px;">
-        <div style="width:7px;height:7px;border-radius:50%;background:{s_color};
-                    box-shadow:0 0 0 0 {s_color}66;
-                    animation:pulse-dot 2s ease-in-out infinite;"></div>
-        <span style="color:{s_color};font-weight:700;font-size:0.75rem;">{s_label}</span>
-      </div>
-      <span style="font-family:'JetBrains Mono',monospace;color:#2E3F62;font-size:0.62rem;">
-        {market_info.get("current_time_ist","")[:8]} IST
-      </span>
-    </div>
+    def render_market_status():
+        m_info = is_market_open()
+        is_op = "OPEN" in m_info.get("status", "").upper()
+        s_c = "#10B981" if is_op else "#EF4444"
+        s_l = "Market Open" if is_op else "Market Closed"
+        
+        s_bg = "#D1FAE5" if is_op else "#FFD6D6"
+        s_tc = "#059669" if is_op else "#E11D48"
+        st.markdown(f"""
+        <!-- Market Status Pill -->
+        <div style="text-align:center; margin-bottom:1.5rem;">
+          <div style="background:{s_bg}; border-radius:50px; padding:0.4rem 1rem; display:inline-flex; align-items:center; gap:8px;">
+            <span style="color:{s_tc}; font-weight:600; font-size:0.75rem;">{s_l}</span>
+            <span style="color:{s_tc}; font-size:0.75rem;">{'📈' if is_op else '📉'}</span>
+            <span style="color:#475569; font-weight:600; font-size:0.7rem;">{m_info.get("current_time_ist","")[:5]} IST</span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
+    if hasattr(st, "fragment"):
+        render_market_status = st.fragment(run_every="60s")(render_market_status)
+
+    render_market_status()
+
+    st.markdown("""
     <div style="height:1px;background:linear-gradient(90deg,transparent,#1C2D4F 30%,#1C2D4F 70%,transparent);margin:0 0.1rem 0.6rem;"></div>
 
     <!-- Nav labels -->
-    <div style="font-family:'JetBrains Mono',monospace;font-size:0.56rem;color:#2E3F62;
+    <div style="font-family:'JetBrains Mono',monospace;font-size:0.52rem;color:#2E3F62;
                 text-transform:uppercase;letter-spacing:0.16em;font-weight:600;
-                padding:0.5rem 0.5rem 0.2rem;">Navigation</div>
+                padding:0.3rem 0.5rem 0.2rem;">Navigation</div>
     """, unsafe_allow_html=True)
 
     nav_options = [
-        "🏠 Dashboard",
-        "📊 Stock Analysis",
-        "🔄 Compare Stocks",
-        "📰 News & Sentiment",
-        "💼 Portfolio Tracker",
-        "⭐ Watchlist",
-        "📋 Market Brief",
-        "🧮 Calculators",
-        "🤖 AI Chat",
+        "Dashboard", "Stock Analysis", "Compare Stocks", 
+        "News & Sentiment", "Portfolio Tracker", "Watchlist", 
+        "Market Brief", "Calculators", "AI Chat",
     ]
-    nav_index = 0
-    if "nav_page" in st.session_state:
-        for i, opt in enumerate(nav_options):
-            if st.session_state["nav_page"] in opt:
-                nav_index = i
-                break
+    
+    if st.session_state.nav_page not in nav_options:
+        st.session_state.nav_page = nav_options[0]
 
-    page = st.radio("nav", options=nav_options, index=nav_index, label_visibility="collapsed")
+    page = st.radio("nav", options=nav_options, key="nav_page_selector", label_visibility="collapsed")
+    # Sync with the actual state variable used by the app
+    st.session_state.nav_page = page
 
-    st.markdown("""
-    <div style="margin-top:1.5rem;padding-top:0.85rem;border-top:1px solid #1C2D4F;">
-      <div style="font-family:'JetBrains Mono',monospace;font-size:0.58rem;color:#2E3F62;line-height:1.7;">
-        LangChain · Streamlit · yfinance · Plotly
-      </div>
-      <div style="font-size:0.6rem;color:#7F1D1D;margin-top:4px;line-height:1.5;">
-        ⚠️ Not SEBI-registered.<br>Educational purposes only.
-      </div>
-    </div>""", unsafe_allow_html=True)
-
+    # Auto-close sidebar on mobile after navigation
+    import time
+    components.html("""
+    <script>
+        // Force re-render on every rerun: """ + str(time.time()) + """
+        let attempts = 0;
+        const interval = setInterval(() => {
+            const parentDoc = window.parent.document;
+            if (window.parent.innerWidth <= 992) {
+                const sidebar = parentDoc.querySelector('[data-testid="stSidebar"]');
+                if (sidebar && sidebar.getAttribute('aria-expanded') === 'true') {
+                    let closeBtn = parentDoc.querySelector('[data-testid="stSidebarCollapseButton"] button');
+                    if (!closeBtn) closeBtn = sidebar.querySelector('button');
+                    if (closeBtn) {
+                        closeBtn.click();
+                        clearInterval(interval);
+                    }
+                }
+            }
+            attempts++;
+            if (attempts > 10) clearInterval(interval);
+        }, 500);
+    </script>
+    """, height=0, width=0)
 
 # ═══════════════════════════════════════════════════════════
+
 #  🏠 DASHBOARD
 # ═══════════════════════════════════════════════════════════
-if page == "🏠 Dashboard":
+if page == "Dashboard":
     page_header("Live Overview", "Market Dashboard", "Real-time pulse of Indian equity markets")
 
-    # ── Parallel load ALL dashboard data at once ──────────────
-    import concurrent.futures as _cf
-    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
-
-    _ctx = get_script_run_ctx()  # capture main thread's Streamlit context
-
-    def _safe_ctx(fn, fallback):
-        """Run fn in a thread with Streamlit context propagated — suppresses ScriptRunContext warnings."""
-        add_script_run_ctx(ctx=_ctx)
-        try:
-            return fn()
-        except Exception:
-            return fallback
-
+    # ── Load dashboard data sequentially to ensure stability ──
+    # Native Streamlit caching handles performance safely without dangerous threading hacks.
     _mood_fallback   = {"mood_label":"Neutral ➡️","mood_color":"#F59E0B","mood_score":50,"bullish_pct":40,"neutral_pct":35,"bearish_pct":25,"gainers":0,"losers":0}
     _movers_fallback = {"gainers":[],"losers":[],"all":[]}
 
-    with _cf.ThreadPoolExecutor(max_workers=8) as _ex:
-        _f_nifty   = _ex.submit(_safe_ctx, lambda: get_stock_price("^NSEI"),    {"error": "Unavailable"})
-        _f_sensex  = _ex.submit(_safe_ctx, lambda: get_stock_price("^BSESN"),   {"error": "Unavailable"})
-        _f_mood    = _ex.submit(_safe_ctx, lambda: get_market_mood(),            _mood_fallback)
-        _f_movers  = _ex.submit(_safe_ctx, lambda: get_top_movers(),             _movers_fallback)
-        _f_heat    = _ex.submit(_safe_ctx, lambda: get_sector_heatmap(),         [])
-        _f_pulse   = _ex.submit(_safe_ctx, lambda: get_52week_pulse(),           {"near_high":[],"near_low":[]})
-        _f_portf   = _ex.submit(_safe_ctx, lambda: get_portfolio(),              [])
-        _f_wl      = _ex.submit(_safe_ctx, lambda: get_watchlist(),              [])
+    with st.spinner("Fetching market pulse..."):
+        try: nifty = get_stock_price("^NSEI")
+        except: nifty = {"error": "Unavailable"}
+        
+        try: sensex = get_stock_price("^BSESN")
+        except: sensex = {"error": "Unavailable"}
+        
+        try: mood_data = get_market_mood()
+        except: mood_data = _mood_fallback
+        
+        try: movers_data = get_top_movers()
+        except: movers_data = _movers_fallback
+        
+        try: heatmap_data = get_sector_heatmap()
+        except: heatmap_data = []
+        
+        try: pulse_data = get_52week_pulse()
+        except: pulse_data = {"near_high":[],"near_low":[]}
+        
+        try: portfolio = get_portfolio()
+        except: portfolio = []
+        
+        try: wl_items = get_watchlist()
+        except: wl_items = []
 
-    nifty        = _f_nifty.result()
-    sensex       = _f_sensex.result()
-    mood_data    = _f_mood.result()
-    movers_data  = _f_movers.result()
-    heatmap_data = _f_heat.result()
-    pulse_data   = _f_pulse.result()
-    portfolio    = _f_portf.result()
-    wl_items     = _f_wl.result()
+    # ── Top 4 index / portfolio metrics ──────────────────────
+    from ui.components import render_metrics_grid
+    dash_metrics = []
 
-    # ── Top 5 index / portfolio metrics ──────────────────────
-    c1, c2, c3, c4, c5 = st.columns(5)
+    # 1. Nifty 50
     if "error" not in nifty:
-        nifty_cc = "#10B981" if nifty["change_pct"] >= 0 else "#EF4444"
-        c1.metric("🔵 Nifty 50", f"{nifty['current_price']:,.2f}", f"{nifty['change_pct']:+.2f}%")
+        dt = "pos" if nifty["change_pct"] >= 0 else "neg"
+        dash_metrics.append({"label": "NIFTY 50", "value": f"{nifty['current_price']:,.2f}", "delta_text": f"{nifty['change_pct']:+.2f}%", "delta_type": dt})
     else:
-        c1.metric("🔵 Nifty 50", "N/A", "—")
+        dash_metrics.append({"label": "NIFTY 50", "value": "N/A", "delta_text": "—", "delta_type": "neu"})
 
+    # 2. Sensex
     if "error" not in sensex:
-        c2.metric("🟠 Sensex", f"{sensex['current_price']:,.2f}", f"{sensex['change_pct']:+.2f}%")
+        dt = "pos" if sensex["change_pct"] >= 0 else "neg"
+        dash_metrics.append({"label": "SENSEX", "value": f"{sensex['current_price']:,.2f}", "delta_text": f"{sensex['change_pct']:+.2f}%", "delta_type": dt})
     else:
-        c2.metric("🟠 Sensex", "N/A", "—")
+        dash_metrics.append({"label": "SENSEX", "value": "N/A", "delta_text": "—", "delta_type": "neu"})
 
-    c3.metric("🌡️ Mood", mood_data["mood_label"].split(" ")[0], f"{mood_data['mood_score']}% score")
-
+    # 3. Portfolio
     if portfolio:
         try:
-            # Portfolio prices already in cache from batch_fetch_prices — instant
             portf_syms = [h["symbol"] for h in portfolio]
             from tools.stock_tools import batch_fetch_prices as _bfp
             portf_prices = _bfp(portf_syms)
             total_val = sum(portf_prices.get(h["symbol"], {}).get("current_price", h["buy_price"]) * h["quantity"] for h in portfolio)
             total_inv = sum(h["buy_price"] * h["quantity"] for h in portfolio)
             pnl = total_val - total_inv
-            c4.metric("💼 Portfolio", f"₹{total_val:,.0f}", f"₹{pnl:+,.0f}")
+            pnl_pct = (pnl / total_inv * 100) if total_inv > 0 else 0
+            dt = "pos" if pnl >= 0 else "neg"
+            dash_metrics.append({"label": "PORTFOLIO", "value": f"₹{total_val:,.0f}", "delta_text": f"{pnl_pct:+.1f}% profit", "delta_type": dt})
         except:
-            c4.metric("💼 Portfolio", "—", "Refresh")
+            dash_metrics.append({"label": "PORTFOLIO", "value": "—", "delta_text": "Refresh", "delta_type": "neu"})
     else:
-        c4.metric("💼 Portfolio", "—", "Add holdings")
+        dash_metrics.append({"label": "PORTFOLIO", "value": "—", "delta_text": "0 items", "delta_type": "neu"})
 
-    wl_count = len(wl_items)
-    c5.metric("📋 Watchlist", wl_count, f"{len(portfolio)} holdings")
+    # 4. Watchlist
+    dash_metrics.append({"label": "WATCHLIST", "value": str(len(wl_items)), "delta_text": "Tracked", "delta_type": "neu"})
+
+    render_metrics_grid(dash_metrics)
 
     st.markdown("---")
 
@@ -973,41 +338,18 @@ if page == "🏠 Dashboard":
         bear  = mood_data["bearish_pct"]
         score = mood_data["mood_score"]
 
-        # Mood chart (Plotly)
-        fig_mood = create_market_mood_chart(score)
-        st.plotly_chart(fig_mood, use_container_width=True)
-
-        st.markdown(f"""
-        <div class="fin-card" style="text-align:center;padding:0.9rem 1rem;margin-top:0.2rem;">
-          <div style="font-family:'Outfit',sans-serif;font-size:1.45rem;font-weight:800;color:{mc};">
-            {mood_data["mood_label"]}
-          </div>
-          <div style="display:flex;justify-content:center;gap:1rem;margin-top:0.6rem;">
-            <div style="text-align:center;">
-              <div style="font-family:'JetBrains Mono',monospace;font-size:0.95rem;font-weight:700;color:#10B981;">{bull}%</div>
-              <div style="font-size:0.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:0.1em;">Bull</div>
-            </div>
-            <div style="width:1px;background:var(--border);"></div>
-            <div style="text-align:center;">
-              <div style="font-family:'JetBrains Mono',monospace;font-size:0.95rem;font-weight:700;color:var(--text2);">{neu}%</div>
-              <div style="font-size:0.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:0.1em;">Neu</div>
-            </div>
-            <div style="width:1px;background:var(--border);"></div>
-            <div style="text-align:center;">
-              <div style="font-family:'JetBrains Mono',monospace;font-size:0.95rem;font-weight:700;color:#EF4444;">{bear}%</div>
-              <div style="font-size:0.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:0.1em;">Bear</div>
-            </div>
-          </div>
-          <div style="font-size:0.68rem;color:var(--text3);margin-top:0.5rem;">
-            ↑ {mood_data.get("gainers",0)} Advancing &nbsp;·&nbsp; ↓ {mood_data.get("losers",0)} Declining
-          </div>
-        </div>""", unsafe_allow_html=True)
+        # Theme-Matched Market Mood Card
+        dash_val = (2.82 * score)
+        mood_label = mood_data["mood_label"].upper()
+        
+        html_content = f"""<div style="background:var(--surface); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid var(--border); border-radius:var(--r24); padding:1.25rem; position:relative; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.3); margin-top:0.5rem;"><div style="position:absolute; top:-30px; right:-30px; width:100px; height:100px; background:{mc}; opacity:0.04; filter:blur(40px); border-radius:50%;"></div><div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:1.5rem;"><div style="position:relative; width:100px; height:100px; flex-shrink:0;"><svg viewBox="0 0 100 100" style="width:100%; height:100%; transform:rotate(-90deg);"><circle cx="50" cy="50" r="44" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="10" /><circle cx="50" cy="50" r="44" fill="none" stroke="{mc}" stroke-width="10" stroke-dasharray="{dash_val}, 282.6" stroke-linecap="round" style="filter:drop-shadow(0 0 8px {mc}66);" /></svg><div style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;"><span style="font-family:'Outfit',sans-serif; font-size:1.8rem; font-weight:900; color:var(--text); line-height:1;">{score}</span><span style="font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.1em;">Score</span></div></div><div style="flex:1; min-width:220px; text-align:center;"><div style="margin-bottom:0.8rem;"><div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.2em; margin-bottom:4px;">Sentiment</div><div style="font-family:'Outfit',sans-serif; font-size:1.5rem; font-weight:900; color:{mc}; text-shadow:0 0 20px {mc}44; letter-spacing:-0.5px;">{mood_label}</div></div><div style="display:flex; gap:0.8rem; padding:0.75rem; background:rgba(255,255,255,0.02); border-radius:16px; border:1px solid var(--border);"><div style="flex:1; text-align:center;"><div style="color:var(--green); font-family:'JetBrains Mono',monospace; font-size:0.95rem; font-weight:800;">{bull}%</div><div style="font-size:0.5rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.05em;">Bullish</div></div><div style="width:1px; background:var(--border);"></div><div style="flex:1; text-align:center;"><div style="color:var(--text2); font-family:'JetBrains Mono',monospace; font-size:0.95rem; font-weight:800;">{neu}%</div><div style="font-size:0.5rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.05em;">Neutral</div></div><div style="width:1px; background:var(--border);"></div><div style="flex:1; text-align:center;"><div style="color:var(--red); font-family:'JetBrains Mono',monospace; font-size:0.95rem; font-weight:800;">{bear}%</div><div style="font-size:0.5rem; color:var(--text3); text-transform:uppercase; letter-spacing:0.05em;">Bearish</div></div></div></div></div></div>"""
+        st.markdown(html_content, unsafe_allow_html=True)
 
     # ── SECTOR HEATMAP ───────────────────────────────────────
     with col_gain:
         sec_hdr("Sector Heatmap", "purple")
         if heatmap_data:
-            st.markdown('<div class="fin-card" style="padding:0.8rem 1rem; margin-top:0.2rem; height: 100%;">', unsafe_allow_html=True)
+            st.markdown('<div class="fin-card" style="padding:1.2rem; margin-top:0.5rem; height: 100%; background: var(--surface); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: var(--r16); box-shadow: 0 4px 20px rgba(0,0,0,0.2);">', unsafe_allow_html=True)
             for sec in heatmap_data[:5]:
                 c = "#10B981" if sec["avg_change"] >= 0 else "#EF4444"
                 prog_bar(sec["sector"], f"{sec['avg_change']:+.2f}%", min(abs(sec["avg_change"]) * 20 + 10, 100), color=c)
@@ -1040,25 +382,209 @@ if page == "🏠 Dashboard":
 # ═══════════════════════════════════════════════════════════
 #  📊 STOCK ANALYSIS
 # ═══════════════════════════════════════════════════════════
-elif page == "📊 Stock Analysis":
-    page_header("Deep Dive", "Stock Analysis", "Technical · Fundamental · AI Signal · PDF Export")
+elif page == "Stock Analysis":
+    # ── CSS injected once ────────────────────────────────────
+    st.markdown("""
+    <style>
+    @keyframes sa-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
 
-    # ── Search bar row ───────────────────────────────────────
-    col_sym, col_btn = st.columns([4, 1])
-    
+    /* ── Page header ── */
+    .sa-ph { margin-bottom: 1.6rem; text-align: center; }
+    .sa-ph-eyebrow {
+      font-family:'JetBrains Mono',monospace; font-size:0.6rem; font-weight:700;
+      color:var(--blue2); text-transform:uppercase; letter-spacing:0.2em;
+      display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:0.3rem; opacity:0.9;
+    }
+    .sa-ph-eyebrow::before{content:'';width:18px;height:1.5px;background:var(--blue2);display:inline-block;}
+    .sa-ph-title {
+      font-family:'Inter',sans-serif; font-size:clamp(1.5rem,4vw,2.1rem);
+      font-weight:800; color:#fff; letter-spacing:-0.8px; line-height:1.1;
+      margin-bottom:0.3rem; text-align:center;
+    }
+    .sa-ph-sub {
+      font-size:clamp(0.75rem,2vw,0.84rem); color:var(--text3); letter-spacing:0.01em; text-align:center;
+    }
+
+    /* ── Search input — style Streamlit's native component ── */
+    [data-testid="stTextInput"] > label { display:none !important; }
+    [data-testid="stTextInput"] > div > div {
+      background: rgba(10,15,30,0.92) !important;
+      border: 1.5px solid rgba(14,165,233,0.25) !important;
+      border-radius: 14px !important;
+      box-shadow: 0 4px 28px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.04) !important;
+      transition: border-color 0.25s, box-shadow 0.25s !important;
+    }
+    [data-testid="stTextInput"] > div > div:focus-within {
+      border-color: rgba(99,130,246,0.7) !important;
+      box-shadow: 0 4px 28px rgba(0,0,0,0.45), 0 0 0 4px rgba(14,165,233,0.12) !important;
+    }
+    [data-testid="stTextInput"] input {
+      color: #fff !important;
+      font-family: 'Inter', sans-serif !important;
+      font-size: 0.88rem !important; font-weight: 500 !important;
+      padding: 0.72rem 1rem !important;
+      background: transparent !important;
+      border: none !important; box-shadow: none !important;
+    }
+    [data-testid="stTextInput"] input::placeholder {
+      color: rgba(113,113,122,0.65) !important; font-size:0.82rem !important;
+    }
+    /* Hide 'Press Enter to apply' helper text - Robust Fix */
+    [data-testid="stTextInput"] p, 
+    [data-testid="stTextInput"] small,
+    [data-testid="InputInstructions"] { 
+      display: none !important; 
+      visibility: hidden !important;
+      height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+
+    /* ── Analyze button ── */
+    [data-testid="baseButton-primary"] {
+      background: linear-gradient(135deg,var(--blue) 0%,#6366F1 100%) !important;
+      border: none !important; border-radius: 10px !important;
+      font-family: 'Inter', sans-serif !important; font-size: 0.82rem !important;
+      font-weight: 700 !important; letter-spacing: 0.02em !important;
+      box-shadow: 0 4px 18px rgba(14,165,233,0.38) !important;
+      transition: all 0.25s !important; padding: 0 1.2rem !important;
+    }
+    [data-testid="baseButton-primary"]:hover {
+      box-shadow: 0 6px 28px rgba(99,102,241,0.55) !important;
+      transform: translateY(-1px) !important;
+    }
+
+    /* ── Stock hero card — Terminal Edition ── */
+    .sa-hero {
+      position:relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px; 
+      margin-top: 2rem;
+      margin-bottom: 1.5rem;
+      overflow:hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    /* Dot-grid background texture */
+    .sa-hero::before {
+      content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+      background-image: radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 22px 22px;
+    }
+    /* Left glowing accent bar */
+    .sa-hero-bar {
+      position:absolute; left:0; top:0; bottom:0; width:3px; z-index:1;
+      background: var(--sa-accent, #10B981);
+      box-shadow: 0 0 16px var(--sa-accent, #10B981);
+    }
+    /* Section: company name + badges */
+    .sa-hero-head {
+      position:relative; z-index:1;
+      display:flex; justify-content:space-between; align-items:center;
+      padding: 0.85rem 1.3rem 0.65rem 1.3rem;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      flex-wrap:wrap; gap:0.5rem;
+    }
+    .sa-company {
+      font-family:'Inter',sans-serif; font-size:clamp(0.88rem,2vw,1.08rem);
+      font-weight:800; color:#fff; letter-spacing:-0.2px; line-height:1.2;
+    }
+    .sa-bdgs { display:flex; align-items:center; gap:0.32rem; flex-wrap:wrap; }
+    .sa-bdg-live {
+      display:inline-flex; align-items:center; gap:4px;
+      background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.35);
+      color:#10B981; border-radius:4px; padding:2px 8px;
+      font-family:'JetBrains Mono',monospace; font-size:0.58rem; font-weight:700;
+      letter-spacing:0.05em;
+    }
+    .sa-bdg-sym {
+      background:rgba(14,165,233,0.08); border:1px solid rgba(14,165,233,0.25);
+      color:var(--blue2); border-radius:4px; padding:2px 8px;
+      font-family:'JetBrains Mono',monospace; font-size:0.58rem; font-weight:600;
+      letter-spacing:0.04em;
+    }
+    /* Section: price */
+    .sa-hero-body {
+      position:relative; z-index:1;
+      padding: 0.75rem 1.3rem 0.55rem;
+    }
+    .sa-price {
+      font-family:'JetBrains Mono',monospace; font-size:clamp(1.35rem,3.5vw,1.85rem);
+      font-weight:700; color:#fff; letter-spacing:-0.5px; line-height:1; display:inline;
+    }
+    .sa-chg-pos { display:inline-block; color:#10B981; font-family:'JetBrains Mono',monospace; font-size:0.75rem; font-weight:700; margin-left:0.75rem; vertical-align:middle; }
+    .sa-chg-neg { display:inline-block; color:#EF4444; font-family:'JetBrains Mono',monospace; font-size:0.75rem; font-weight:700; margin-left:0.75rem; vertical-align:middle; }
+    /* Section: 52W range */
+    .sa-range { position:relative; z-index:1; padding: 0.3rem 1.3rem 0.6rem; }
+    .sa-range-hdr {
+      display:flex; justify-content:space-between; align-items:center;
+      font-family:'JetBrains Mono',monospace; font-size:0.56rem;
+      color:var(--text4); margin-bottom:0.35rem; text-transform:uppercase; letter-spacing:0.08em;
+    }
+    .sa-bar {
+      width:100%; height:4px; border-radius:4px;
+      background:rgba(255,255,255,0.07); position:relative;
+    }
+    .sa-bar-fill { height:100%; border-radius:4px; background:linear-gradient(90deg,#EF4444 0%,#F59E0B 50%,#10B981 100%); }
+    .sa-bar-dot {
+      position:absolute; top:50%; transform:translate(-50%,-50%);
+      width:10px; height:10px; border-radius:50%;
+      background:#fff; border:2px solid var(--sa-accent,var(--blue));
+      box-shadow:0 0 10px var(--sa-accent,var(--blue));
+    }
+    /* Section: stats — 4-col grid with vertical dividers */
+    .sa-stats {
+      position:relative; z-index:1;
+      display:grid; grid-template-columns:repeat(4,1fr);
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+    .sa-st {
+      padding: 0.6rem 1.1rem;
+      border-right: 1px solid rgba(255,255,255,0.05);
+      display:flex; flex-direction:column; gap:3px;
+    }
+    .sa-st:last-child { border-right:none; }
+    .sa-sk {
+      font-family:'JetBrains Mono',monospace; font-size:0.53rem;
+      color:var(--text4); text-transform:uppercase; letter-spacing:0.1em;
+    }
+    .sa-sv {
+      font-family:'JetBrains Mono',monospace; font-size:0.8rem;
+      font-weight:700; color:var(--text);
+    }
+    @media(max-width:768px){
+      .sa-stats { grid-template-columns:repeat(2,1fr); }
+      .sa-st:nth-child(2) { border-right:none; }
+      .sa-st:nth-child(3), .sa-st:nth-child(4) { border-top:1px solid rgba(255,255,255,0.05); }
+      .sa-price { font-size:1.4rem; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Page header
+    st.markdown("""<div class="sa-ph">
+<div class="sa-ph-eyebrow">Deep Dive Analytics</div>
+<div class="sa-ph-title">Stock Analysis</div>
+<div class="sa-ph-sub">Technical &nbsp;·&nbsp; Fundamental &nbsp;·&nbsp; AI Signal &nbsp;·&nbsp; PDF Export</div>
+</div>""", unsafe_allow_html=True)
+
     if st.session_state.get("selected_symbol") in ["BTC-USD", "RELIANCE.NS"]:
         st.session_state["selected_symbol"] = ""
-        
+
+    col_sym, col_btn = st.columns([3.2, 1])
     with col_sym:
-        symbol_raw = st.text_input("Stock Symbol", value=st.session_state.get("selected_symbol", ""), placeholder="e.g. RELIANCE.NS  /  TCS.NS  /  HDFCBANK.NS")
+        symbol_raw = st.text_input("__sym", label_visibility="collapsed",
+            value=st.session_state.get("selected_symbol", ""),
+            placeholder="🔍  Enter symbol  —  e.g. RELIANCE.NS  ·  TCS.NS  ·  HDFCBANK.NS")
     with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
-        analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
+        analyze_btn = st.button("Analyze →", type="primary", use_container_width=True)
 
     is_valid, norm_sym = validate_symbol(symbol_raw)
-    
+
     if not symbol_raw:
-        st.info("💡 Type an Indian stock symbol above (e.g. RELIANCE.NS or INFY.NS) to begin analysis.")
+        st.markdown('<br>', unsafe_allow_html=True)
+        st.info("💡 Enter an Indian stock symbol above to begin deep-dive analysis.")
     elif not is_valid:
         st.warning(f"⚠️ {norm_sym}")
 
@@ -1066,9 +592,8 @@ elif page == "📊 Stock Analysis":
         st.session_state["auto_analyze"]    = norm_sym
         st.session_state["selected_symbol"] = norm_sym
 
-        if True:
-            try:    price_data = get_stock_price(norm_sym)
-            except: price_data = {"error": "Could not fetch price data."}
+        try:    price_data = get_stock_price(norm_sym)
+        except: price_data = {"error": "Could not fetch price data."}
 
         if "error" in price_data:
             st.error(f"❌ {price_data['error']}")
@@ -1077,25 +602,52 @@ elif page == "📊 Stock Analysis":
             price   = price_data["current_price"]
             change  = price_data["change"]
             chg_pct = price_data["change_pct"]
+            prev_cl = price_data.get("previous_close", price)
+            hi52    = price_data.get("52_week_high", price)
+            lo52    = price_data.get("52_week_low",  price)
+            pe_r    = price_data.get("pe_ratio", "N/A")
+            vol     = price_data.get("volume", None)
 
-            # Company name + live badge
-            chg_color = "#10B981" if chg_pct >= 0 else "#EF4444"
-            st.markdown(f"""
-            <div style="display:flex;align-items:center;gap:12px;margin:0.5rem 0 1.1rem;">
-              <div style="font-family:'Outfit',sans-serif;font-size:1.5rem;font-weight:800;color:var(--text);letter-spacing:-0.4px;">{cname}</div>
-              <span class="badge badge-live">● LIVE</span>
-              <span class="badge badge-blue">{norm_sym}</span>
-            </div>""", unsafe_allow_html=True)
+            chg_color   = "#10B981" if chg_pct >= 0 else "#EF4444"
+            chg_arrow   = "▲" if chg_pct >= 0 else "▼"
+            chg_cls     = "pos" if chg_pct >= 0 else "neg"
+            accent_c    = chg_color
 
-            # 5 metrics
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("💰 Current Price", f"₹{price:,.2f}",  f"{chg_pct:+.2f}% ({change:+.2f})")
-            m2.metric("📉 Prev Close",    f"₹{price_data['previous_close']:,.2f}")
-            m3.metric("📈 52W High",      f"₹{price_data.get('52_week_high','N/A')}")
-            m4.metric("📉 52W Low",       f"₹{price_data.get('52_week_low','N/A')}")
-            m5.metric("P/E Ratio",        str(price_data.get("pe_ratio","N/A")))
+            # 52-week range position (%)
+            try:
+                range_span = float(hi52) - float(lo52)
+                range_pct  = ((price - float(lo52)) / range_span * 100) if range_span > 0 else 50
+                range_pct  = max(0, min(100, range_pct))
+                lo52_s     = f"₹{float(lo52):,.1f}"
+                hi52_s     = f"₹{float(hi52):,.1f}"
+            except:
+                range_pct  = 50
+                lo52_s     = str(lo52)
+                hi52_s     = str(hi52)
 
-            st.markdown("---")
+            vol_s = f"{vol/1_000_000:.2f}M" if vol and vol >= 1_000_000 else (f"{vol/1_000:.1f}K" if vol else "N/A")
+
+            # ── Stock Hero Card ──────────────────────────────
+            st.markdown(f'<div class="sa-hero" style="--sa-accent:{accent_c};"><div class="sa-hero-bar"></div><div class="sa-hero-head"><div class="sa-company">{cname}</div><div class="sa-bdgs"><span class="sa-bdg-live"><span style="width:6px;height:6px;border-radius:50%;background:#10B981;display:inline-block;animation:blink 1.2s infinite;"></span>&nbsp;LIVE</span><span class="sa-bdg-sym">{norm_sym}</span></div></div><div class="sa-hero-body"><div class="sa-price">₹{price:,.2f}</div><div class="sa-chg-{chg_cls}">{chg_arrow}&nbsp;₹{abs(change):.2f}&nbsp;({chg_pct:+.2f}%)</div></div><div class="sa-range"><div class="sa-range-hdr"><span>52W Low &nbsp;{lo52_s}</span><span>52-week range</span><span>52W High &nbsp;{hi52_s}</span></div><div class="sa-bar"><div class="sa-bar-fill" style="width:{range_pct:.1f}%;"></div><div class="sa-bar-dot" style="left:{range_pct:.1f}%;"></div></div></div><div class="sa-stats"><div class="sa-st"><div class="sa-sk">Prev Close</div><div class="sa-sv">₹{prev_cl:,.2f}</div></div><div class="sa-st"><div class="sa-sk">Volume</div><div class="sa-sv">{vol_s}</div></div><div class="sa-st"><div class="sa-sk">P/E Ratio</div><div class="sa-sv">{pe_r}</div></div><div class="sa-st"><div class="sa-sk">Day Change</div><div class="sa-sv" style="color:{chg_color};">{chg_arrow}&nbsp;{abs(chg_pct):.2f}%</div></div></div></div>', unsafe_allow_html=True)
+
+            # ── Inject mobile column-stack CSS ──────────────────
+            st.markdown("""
+            <style>
+            /* On mobile, collapse Streamlit's side-by-side columns into a vertical stack */
+            @media (max-width: 768px) {
+              [data-testid="stHorizontalBlock"].sa-chart-row > div {
+                flex: 0 0 100% !important;
+                width: 100% !important;
+                min-width: 100% !important;
+              }
+              /* Make chart iframe/canvas fill parent */
+              [data-testid="stPlotlyChart"] > div,
+              [data-testid="stPlotlyChart"] iframe {
+                width: 100% !important;
+              }
+            }
+            </style>
+            """, unsafe_allow_html=True)
 
             # ── Main layout: Chart (left-wide) | Signal (right-narrow) ──
             col_chart, col_sig = st.columns([3.2, 1])
@@ -1113,107 +665,69 @@ elif page == "📊 Stock Analysis":
                     sig_label = sig["signal"]
                     sig_emoji = sig["signal_emoji"]
 
-                    # Color map for backgrounds
-                    bg_map = {
-                        "BUY":  ("rgba(5,46,22,0.95)",  "rgba(16,185,129,0.25)", "rgba(16,185,129,0.08)"),
-                        "SELL": ("rgba(69,10,10,0.95)",  "rgba(239,68,68,0.25)",  "rgba(239,68,68,0.08)"),
-                        "HOLD": ("rgba(69,49,0,0.95)",   "rgba(245,158,11,0.25)", "rgba(245,158,11,0.08)"),
-                    }
-                    bg_dark, glow_mid, glow_outer = bg_map.get(sig_label, bg_map["HOLD"])
+                    # Color tokens
+                    col_map = {"BUY": ("#10B981","rgba(16,185,129,0.08)","rgba(16,185,129,0.28)"),
+                               "SELL":("#EF4444","rgba(239,68,68,0.08)","rgba(239,68,68,0.28)"),
+                               "HOLD":("#F59E0B","rgba(245,158,11,0.08)","rgba(245,158,11,0.28)")}
+                    txt_c, bg_tint, br_tint = col_map.get(sig_label, col_map["HOLD"])
 
-                    # SVG arc for confidence ring
-                    r, cx, cy = 38, 50, 50
-                    circ = 2 * 3.14159 * r
-                    dash_fill = circ * conf / 100
-                    dash_gap  = circ - dash_fill
+                    # Build reasons HTML
+                    def _dot(r):
+                        if any(w in r.lower() for w in ["positive","bullish","above","strong","upward"]): return "#10B981"
+                        if any(w in r.lower() for w in ["negative","bearish","below","weak","downward"]): return "#EF4444"
+                        return "#6B7280"
+
+                    reasons_html = "".join([
+                        f'<div style="display:flex;align-items:flex-start;gap:7px;padding:0.3rem 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
+                        f'<div style="width:5px;height:5px;border-radius:50%;margin-top:5px;flex-shrink:0;background:{_dot(r)};"></div>'
+                        f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.55);line-height:1.5;">{r}</div>'
+                        f'</div>'
+                        for r in sig.get("reasons", [])
+                    ])
 
                     st.markdown(f"""
-                    <style>
-                    @keyframes sig-pulse {{
-                      0%,100% {{ box-shadow: 0 0 0 0 {sc}40, 0 0 40px {sc}20; }}
-                      50%      {{ box-shadow: 0 0 0 8px transparent, 0 0 60px {sc}35; }}
-                    }}
-                    @keyframes arc-draw {{
-                      from {{ stroke-dashoffset: {circ:.1f}; }}
-                      to   {{ stroke-dashoffset: {circ - dash_fill:.1f}; }}
-                    }}
-                    </style>
-
-                    <!-- SIGNAL MAIN CARD -->
                     <div style="
-                      background: linear-gradient(160deg, {bg_dark} 0%, #080C16 100%);
-                      border: 1px solid {sc}55;
-                      border-radius: 20px;
-                      padding: 1.4rem 1rem 1rem;
-                      text-align: center;
-                      position: relative;
-                      overflow: hidden;
-                      animation: sig-pulse 3s ease-in-out infinite;
+                      background:linear-gradient(160deg,rgba(10,14,26,0.98) 0%,rgba(14,20,38,0.96) 100%);
+                      border:1px solid rgba(255,255,255,0.07);
+                      border-radius:14px; overflow:hidden;
+                      box-shadow:0 4px 24px rgba(0,0,0,0.4);
                     ">
-                      <!-- top shimmer line -->
-                      <div style="position:absolute;top:0;left:0;right:0;height:2px;
-                                  background:linear-gradient(90deg,transparent,{sc}CC,transparent);"></div>
-
-                      <!-- SVG Confidence Ring -->
-                      <div style="position:relative;display:inline-block;margin-bottom:0.5rem;">
-                        <svg width="100" height="100" viewBox="0 0 100 100" style="transform:rotate(-90deg);">
-                          <!-- track -->
-                          <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
-                                  stroke="rgba(255,255,255,0.08)" stroke-width="6"/>
-                          <!-- fill arc -->
-                          <circle cx="{cx}" cy="{cy}" r="{r}" fill="none"
-                                  stroke="{sc}" stroke-width="6"
-                                  stroke-linecap="round"
-                                  stroke-dasharray="{dash_fill:.1f} {dash_gap:.1f}"
-                                  stroke-dashoffset="0"
-                                  style="filter:drop-shadow(0 0 4px {sc});
-                                         animation: arc-draw 1.2s cubic-bezier(0.4,0,0.2,1) forwards;"/>
-                        </svg>
-                        <!-- center content -->
-                        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);line-height:1;">
-                          <div style="font-size:1.6rem;">{sig_emoji}</div>
+                      <!-- Header row -->
+                      <div style="display:flex;align-items:center;justify-content:space-between;
+                                  padding:0.75rem 1rem 0.6rem;
+                                  border-bottom:1px solid rgba(255,255,255,0.05);">
+                        <div style="font-family:'JetBrains Mono',monospace;font-size:0.6rem;
+                                    color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.14em;">
+                          AI Signal
+                        </div>
+                        <div style="
+                          font-family:'JetBrains Mono',monospace; font-size:0.72rem; font-weight:800;
+                          color:{txt_c}; background:{bg_tint}; border:1px solid {br_tint};
+                          border-radius:5px; padding:2px 10px; letter-spacing:0.08em;
+                        ">{sig_label}</div>
+                      </div>
+                      <!-- Confidence bar -->
+                      <div style="padding:0.6rem 1rem 0.5rem;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                          <span style="font-family:'JetBrains Mono',monospace;font-size:0.56rem;
+                                       color:rgba(255,255,255,0.28);text-transform:uppercase;letter-spacing:0.1em;">
+                            Confidence
+                          </span>
+                          <span style="font-family:'JetBrains Mono',monospace;font-size:0.8rem;
+                                       font-weight:700;color:{txt_c};">{conf}%</span>
+                        </div>
+                        <div style="height:3px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;">
+                          <div style="height:100%;width:{conf}%;background:{txt_c};border-radius:3px;
+                                      box-shadow:0 0 8px {txt_c}80;"></div>
                         </div>
                       </div>
-
-                      <!-- Signal label -->
-                      <div style="font-family:'Outfit',sans-serif;font-size:1.75rem;font-weight:900;
-                                  color:{sc};letter-spacing:0.06em;line-height:1;margin-bottom:0.5rem;
-                                  text-shadow:0 0 20px {sc}80;">{sig_label}</div>
-
-                      <!-- Confidence row -->
-                      <div style="display:inline-flex;align-items:center;gap:8px;
-                                  background:rgba(0,0,0,0.3);border:1px solid {sc}30;
-                                  border-radius:50px;padding:5px 14px;margin-bottom:0.3rem;">
-                        <span style="font-size:0.65rem;color:rgba(255,255,255,0.4);
-                                     text-transform:uppercase;letter-spacing:0.12em;">Confidence</span>
-                        <span style="font-family:'JetBrains Mono',monospace;font-size:1rem;
-                                     font-weight:700;color:{sc};">{conf}%</span>
+                      <!-- Reasons -->
+                      <div style="padding:0 1rem 0.7rem;">
+                        <div style="font-family:'JetBrains Mono',monospace;font-size:0.54rem;
+                                    color:rgba(255,255,255,0.2);text-transform:uppercase;
+                                    letter-spacing:0.14em;margin-bottom:0.35rem;">Signal Factors</div>
+                        {reasons_html}
                       </div>
-                    </div>
-
-                    <!-- REASONS CARD -->
-                    <div style="
-                      background: rgba(9,14,26,0.9);
-                      border: 1px solid rgba(255,255,255,0.07);
-                      border-radius: 14px;
-                      padding: 0.9rem 1rem;
-                      margin-top: 0.6rem;
-                    ">
-                      <div style="font-family:'JetBrains Mono',monospace;font-size:0.6rem;
-                                  color:rgba(255,255,255,0.25);text-transform:uppercase;
-                                  letter-spacing:0.15em;margin-bottom:0.6rem;">Signal Factors</div>
-                      {"".join([f'''
-                      <div style="display:flex;align-items:flex-start;gap:8px;padding:0.45rem 0;
-                                  border-bottom:1px solid rgba(255,255,255,0.05);">
-                        <div style="width:6px;height:6px;border-radius:50%;margin-top:5px;flex-shrink:0;
-                                    background:{"#10B981" if "positive" in r.lower() or "bullish" in r.lower() or "above" in r.lower()
-                                               else "#EF4444" if "negative" in r.lower() or "bearish" in r.lower() or "below" in r.lower()
-                                               else "#94A3C8"};
-                                    box-shadow:0 0 6px {"#10B98180" if "positive" in r.lower() or "bullish" in r.lower() or "above" in r.lower()
-                                                        else "#EF444480" if "negative" in r.lower() or "bearish" in r.lower() or "below" in r.lower()
-                                                        else "#94A3C840"};"></div>
-                        <div style="font-size:0.76rem;color:rgba(255,255,255,0.6);line-height:1.45;">{r}</div>
-                      </div>''' for r in sig.get("reasons", [])])}
                     </div>
                     """, unsafe_allow_html=True)
                 else:
@@ -1224,6 +738,7 @@ elif page == "📊 Stock Analysis":
                     render_interactive_chart(norm_sym, height=600, key_prefix="analysis")
 
             # ── Fundamentals ─────────────────────────────────
+            st.markdown("<div style='margin-top: 1.5rem;'></div>", unsafe_allow_html=True)
             with st.expander("📋 Fundamental Metrics", expanded=True):
                 if True:
                     try:    fd = get_fundamental_analysis(norm_sym)
@@ -1254,79 +769,89 @@ elif page == "📊 Stock Analysis":
                     roe_c = "#10B981" if isinstance(roe, float) and roe > 0.15 else "var(--text)"
                     de_c  = "#EF4444" if isinstance(de,  (int,float)) and de > 1.5 else "#10B981" if isinstance(de,(int,float)) and de < 0.5 else "var(--text)"
 
-                    st.markdown(f"""
+                    st.markdown("""
                     <style>
-                    .fm-section {{
+                    .fm-section {
                       background: var(--surface);
+                      backdrop-filter: blur(16px);
                       border: 1px solid var(--border);
                       border-radius: 16px;
                       padding: 1.1rem 1.2rem 1rem;
                       position: relative; overflow: hidden;
-                    }}
-                    .fm-section::before {{
+                      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                      transition: all 0.3s ease;
+                    }
+                    .fm-section:hover {
+                      border-color: rgba(255,255,255,0.2);
+                      transform: translateY(-2px);
+                      box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+                    }
+                    .fm-section::before {
                       content:''; position:absolute; top:0; left:0; right:0; height:2px;
                       border-radius:16px 16px 0 0;
-                    }}
-                    .fm-blue::before  {{ background: linear-gradient(90deg, #3B82F6, #06B6D4); }}
-                    .fm-green::before {{ background: linear-gradient(90deg, #10B981, #84CC16); }}
-                    .fm-amber::before {{ background: linear-gradient(90deg, #F59E0B, #F97316); }}
+                    }
+                    .fm-blue::before  { background: linear-gradient(90deg, var(--blue), #06B6D4); }
+                    .fm-green::before { background: linear-gradient(90deg, #10B981, #84CC16); }
+                    .fm-amber::before { background: linear-gradient(90deg, #F59E0B, #F97316); }
 
-                    .fm-title {{
+                    .fm-title {
                       display: flex; align-items: center; gap: 7px;
                       margin-bottom: 0.85rem;
-                    }}
-                    .fm-title-icon {{
+                    }
+                    .fm-title-icon {
                       width: 28px; height: 28px; border-radius: 8px;
                       display: flex; align-items: center; justify-content: center;
                       font-size: 0.85rem;
-                    }}
-                    .fm-title-text {{
-                      font-family: 'Outfit', sans-serif !important;
-                      font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
-                    }}
+                    }
+                    .fm-title-text {
+                      font-family: 'Inter', sans-serif !important;
+                      font-size: 0.88rem; font-weight: 700; letter-spacing: 0.02em;
+                    }
 
-                    .fm-metric {{
+                    .fm-metric {
                       display: flex; align-items: center;
                       justify-content: space-between;
                       padding: 0.5rem 0;
                       border-bottom: 1px solid rgba(255,255,255,0.04);
-                    }}
-                    .fm-metric:last-child {{ border-bottom: none; padding-bottom: 0; }}
-                    .fm-metric-label {{
+                    }
+                    .fm-metric:last-child { border-bottom: none; padding-bottom: 0; }
+                    .fm-metric-label {
                       font-size: 0.76rem; color: var(--text3);
                       display: flex; align-items: center; gap: 6px;
-                    }}
-                    .fm-metric-val {{
+                    }
+                    .fm-metric-val {
                       font-family: 'JetBrains Mono', monospace !important;
                       font-size: 0.92rem; font-weight: 700;
-                    }}
+                    }
                     </style>
+                    """, unsafe_allow_html=True)
 
-                    <div style="display:grid; grid-template-columns: repeat(3,1fr); gap: 0.85rem;">
+                    st.markdown(f"""
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.2rem; margin-bottom: 0.5rem;">
 
                       <!-- VALUATION -->
                       <div class="fm-section fm-blue">
                         <div class="fm-title">
-                          <div class="fm-title-icon" style="background:rgba(59,130,246,0.15);">📊</div>
-                          <div class="fm-title-text" style="color:#60A5FA;">Valuation</div>
+                          <div class="fm-title-icon" style="background:rgba(14,165,233,0.15);">📊</div>
+                          <div class="fm-title-text" style="color:var(--blue2);">Valuation</div>
                         </div>
                         <div class="fm-metric">
                           <span class="fm-metric-label">
-                            <span style="width:3px;height:3px;border-radius:50%;background:#60A5FA;display:inline-block;"></span>
+                            <span style="width:3px;height:3px;border-radius:50%;background:var(--blue2);display:inline-block;"></span>
                             P/E Ratio
                           </span>
                           <span class="fm-metric-val" style="color:{pe_c};">{pe}</span>
                         </div>
                         <div class="fm-metric">
                           <span class="fm-metric-label">
-                            <span style="width:3px;height:3px;border-radius:50%;background:#60A5FA;display:inline-block;"></span>
+                            <span style="width:3px;height:3px;border-radius:50%;background:var(--blue2);display:inline-block;"></span>
                             P/B Ratio
                           </span>
                           <span class="fm-metric-val" style="color:{pb_c};">{pb}</span>
                         </div>
                         <div class="fm-metric">
                           <span class="fm-metric-label">
-                            <span style="width:3px;height:3px;border-radius:50%;background:#60A5FA;display:inline-block;"></span>
+                            <span style="width:3px;height:3px;border-radius:50%;background:var(--blue2);display:inline-block;"></span>
                             EPS
                           </span>
                           <span class="fm-metric-val">₹{eps}</span>
@@ -1395,6 +920,7 @@ elif page == "📊 Stock Analysis":
                     st.warning(f"⚠️ Fundamental data unavailable.")
 
             # ── AI Deep Analysis ─────────────────────────────
+            st.markdown("<div style='margin-top: 1.2rem;'></div>", unsafe_allow_html=True)
             with st.expander("🤖 AI Deep Analysis", expanded=False):
                 agent = get_agent()
                 if agent and not st.session_state.agent_error:
@@ -1418,13 +944,16 @@ elif page == "📊 Stock Analysis":
             st.markdown("---")
             if st.button(f"⭐ Add {norm_sym.replace('.NS','')} to Watchlist", type="secondary", use_container_width=True):
                 res = add_to_watchlist(norm_sym, cname)
-                st.success(res["message"]) if res["success"] else st.warning(res["message"])
+                if res["success"]:
+                    st.success(res["message"])
+                else:
+                    st.warning(res["message"])
 
 
 # ═══════════════════════════════════════════════════════════
 #  🔄 COMPARE STOCKS
 # ═══════════════════════════════════════════════════════════
-elif page == "🔄 Compare Stocks":
+elif page == "Compare Stocks":
     page_header("Side by Side", "Compare Stocks", "Multi-stock technical & AI signal comparison")
 
     # Sector quick-pick
@@ -1471,25 +1000,36 @@ elif page == "🔄 Compare Stocks":
                             except: sig = {"error": "N/A"}
                         all_signals.append(sig)
                         if "error" not in sig:
-                            css = {"BUY":"signal-buy","SELL":"signal-sell","HOLD":"signal-hold"}.get(sig["signal"],"signal-hold")
-                            sc  = sig["signal_color"]
+                            slabel = sig["signal"]
+                            sc     = sig["signal_color"]
+                            bg_c   = {"BUY":"rgba(16,185,129,0.1)","SELL":"rgba(239,68,68,0.1)","HOLD":"rgba(245,158,11,0.1)"}.get(slabel, "rgba(255,255,255,0.05)")
+                            br_c   = {"BUY":"rgba(16,185,129,0.25)","SELL":"rgba(239,68,68,0.25)","HOLD":"rgba(245,158,11,0.25)"}.get(slabel, "rgba(255,255,255,0.1)")
+
                             st.markdown(f"""
-                            <div class="{css}">
-                              <div style="font-family:'Outfit',sans-serif;font-size:0.9rem;font-weight:800;color:var(--text);margin-bottom:5px;">{sym.replace('.NS','')}</div>
-                              <div style="font-size:1.6rem;">{sig["signal_emoji"]}</div>
-                              <div style="font-family:'Outfit',sans-serif;font-size:1.2rem;font-weight:800;color:{sc};">{sig["signal"]}</div>
-                              <div style="background:rgba(255,255,255,0.1);border-radius:4px;height:5px;margin-top:8px;overflow:hidden;">
-                                <div style="background:{sc};width:{sig['confidence']}%;height:100%;border-radius:4px;"></div>
-                              </div>
-                              <div style="font-family:'JetBrains Mono',monospace;font-size:0.68rem;color:rgba(255,255,255,0.4);margin-top:5px;">{sig['confidence']}% conf.</div>
+                            <div style="background:{bg_c}; border:1px solid {br_c}; border-radius:10px; padding:0.6rem 0.8rem; text-align:center; box-shadow:0 4px 12px rgba(0,0,0,0.2); margin-bottom: 1rem;">
+                              <div style="font-family:'JetBrains Mono',monospace;font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.12em;margin-bottom:4px;">{sym.replace('.NS','')}</div>
+                              <div style="font-family:'Inter',sans-serif;font-size:1.05rem;font-weight:800;color:{sc};text-shadow:0 0 10px {sc}40;">{slabel}</div>
+                              <div style="font-family:'JetBrains Mono',monospace;font-size:0.55rem;color:rgba(255,255,255,0.2);margin-top:5px;letter-spacing:0.05em;">{sig['confidence']}% CONFIDENCE</div>
                             </div>""", unsafe_allow_html=True)
                         else:
                             st.caption(f"N/A — {sym.replace('.NS','')}")
 
-                sec_hdr("6-Month Performance", "green")
+                st.markdown("<div style='margin-top: 2.5rem;'></div>", unsafe_allow_html=True)
+                sec_hdr("Normalized Performance (Base=100)", "blue")
+                st.markdown("<div style='margin-top: 0.8rem;'></div>", unsafe_allow_html=True)
+
                 if True:
                     try:
-                        st.plotly_chart(create_comparison_chart(valid_syms, df), use_container_width=True)
+                        st.plotly_chart(
+                            create_comparison_chart(valid_syms, df),
+                            use_container_width=True,
+                            config={
+                                "displayModeBar": False,
+                                "scrollZoom": True,
+                                "doubleClick": "reset+autosize",
+                                "responsive": True,
+                            }
+                        )
                     except Exception as e:
                         logger.error("Comparison chart: %s", e)
                         st.warning("⚠️ Chart unavailable.")
@@ -1503,7 +1043,7 @@ elif page == "🔄 Compare Stocks":
                             except Exception as e:
                                 logger.error("AI compare: %s", e)
                                 ai_sum = "⚠️ AI summary unavailable."
-                        st.markdown(f'<div class="fin-card fin-card-glow-blue" style="line-height:1.75;font-size:0.88rem;color:var(--text2);">{ai_sum}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="fin-card" style="line-height:1.75;font-size:0.9rem;color:var(--text); background: var(--surface); backdrop-filter: blur(16px); border: 1px solid var(--blue2); box-shadow: 0 0 20px rgba(14,165,233,0.15); border-radius: 12px; padding: 1.2rem; margin-bottom: 1rem;">{ai_sum}</div>', unsafe_allow_html=True)
             else:
                 st.error("❌ Could not fetch data. Check your symbols.")
 
@@ -1511,7 +1051,7 @@ elif page == "🔄 Compare Stocks":
 # ═══════════════════════════════════════════════════════════
 #  📰 NEWS & SENTIMENT
 # ═══════════════════════════════════════════════════════════
-elif page == "📰 News & Sentiment":
+elif page == "News & Sentiment":
     page_header("Market Intelligence", "News & Sentiment", "Real-time articles with VADER sentiment scoring")
 
     col_sym, col_btn = st.columns([4, 1])
@@ -1519,9 +1059,8 @@ elif page == "📰 News & Sentiment":
     if st.session_state.get("selected_symbol") in ["BTC-USD", "RELIANCE.NS"]:
         st.session_state["selected_symbol"] = ""
         
-    symbol_news = col_sym.text_input("Stock Symbol", value=st.session_state.get("selected_symbol",""), placeholder="e.g. RELIANCE.NS")
+    symbol_news = col_sym.text_input("Stock Symbol", value=st.session_state.get("selected_symbol",""), placeholder="e.g. RELIANCE.NS", label_visibility="collapsed")
     with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
         fetch_btn = st.button("📰 Fetch", type="primary", use_container_width=True)
 
     if fetch_btn:
@@ -1609,7 +1148,8 @@ elif page == "📰 News & Sentiment":
                     if True:
                         resp = chain.invoke({"symbol": norm, "company_name": cname, "articles": articles_text,
                                             "sentiment_score": nr["avg_score"], "sentiment_label": nr["overall_sentiment"]})
-                    st.markdown(f'<div class="fin-card fin-card-glow-blue" style="line-height:1.75;font-size:0.88rem;color:var(--text2);">{resp.content}</div>', unsafe_allow_html=True)
+                    resp_clean = resp.content.replace("**", "")
+                    st.markdown(f'<div class="fin-card fin-card-glow-blue" style="line-height:1.75;font-size:0.88rem;color:var(--text2);">{resp_clean}</div>', unsafe_allow_html=True)
                 except Exception as e:
                     logger.error("AI news: %s", e)
                     st.warning("⚠️ AI summary unavailable.")
@@ -1618,7 +1158,7 @@ elif page == "📰 News & Sentiment":
 # ═══════════════════════════════════════════════════════════
 #  💼 PORTFOLIO TRACKER
 # ═══════════════════════════════════════════════════════════
-elif page == "💼 Portfolio Tracker":
+elif page == "Portfolio Tracker":
     page_header("Wealth Management", "Portfolio Tracker", "Live P&L · Risk Analysis · AI Insights")
 
     tab_view, tab_add = st.tabs(["📊 My Portfolio", "➕ Add Holding"])
@@ -1639,7 +1179,10 @@ elif page == "💼 Portfolio Tracker":
                 if ok:
                     res = add_to_portfolio(ns, p_comp, float(p_buy), int(p_qty), str(p_date), p_note)
                     msg = str(res.get("message","Done"))
-                    st.success(f"✅ {msg}") if res.get("success") else st.error(f"❌ {msg}")
+                    if res.get("success"):
+                        st.success(f"✅ {msg}")
+                    else:
+                        st.error(f"❌ {msg}")
                 else:
                     st.error("❌ Invalid symbol")
 
@@ -1675,11 +1218,27 @@ elif page == "💼 Portfolio Tracker":
             t_pct = (t_pnl/t_inv*100) if t_inv else 0
 
             # Summary metrics
-            pm1, pm2, pm3, pm4 = st.columns(4)
-            pm1.metric("💰 Invested",      f"₹{t_inv:,.0f}")
-            pm2.metric("📈 Current Value", f"₹{t_cur:,.0f}")
-            pm3.metric("💵 Total P&L",     f"₹{t_pnl:+,.0f}", f"{t_pct:+.2f}%")
-            pm4.metric("📋 Holdings",      len(holdings))
+            st.markdown(f"""
+            <div class="dash-metrics-grid">
+              <div class="dash-metric-card">
+                <div class="dash-metric-label">💰 Invested</div>
+                <div class="dash-metric-value">₹{t_inv:,.0f}</div>
+              </div>
+              <div class="dash-metric-card">
+                <div class="dash-metric-label">📈 Current Value</div>
+                <div class="dash-metric-value">₹{t_cur:,.0f}</div>
+              </div>
+              <div class="dash-metric-card">
+                <div class="dash-metric-label">💵 Total P&L</div>
+                <div class="dash-metric-value">₹{t_pnl:+,.0f}</div>
+                <div class="dash-metric-delta {'pos' if t_pct>=0 else 'neg'}">{'▲' if t_pct>=0 else '▼'} {abs(t_pct):.2f}%</div>
+              </div>
+              <div class="dash-metric-card">
+                <div class="dash-metric-label">📋 Holdings</div>
+                <div class="dash-metric-value">{len(holdings)}</div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
 
             st.markdown("---")
 
@@ -1692,7 +1251,8 @@ elif page == "💼 Portfolio Tracker":
                     try:    risk = calculate_portfolio_risk(holdings, cur_px)
                     except: risk = {"error": "Unavailable"}
                 if "error" not in risk:
-                    st.plotly_chart(create_risk_meter(risk["risk_score"]), use_container_width=True)
+                    st.plotly_chart(create_risk_meter(risk["risk_score"]), use_container_width=True,
+                                    config={"displayModeBar": False, "responsive": True})
                     rc = risk["risk_color"]
                     st.markdown(f"""
                     <div class="fin-card" style="text-align:center;padding:0.8rem;">
@@ -1708,26 +1268,29 @@ elif page == "💼 Portfolio Tracker":
                 try:
                     pie_df = pd.DataFrame({"Symbol":[r["Symbol"] for r in rows],
                                            "Value (₹)":[h["buy_price"]*h["quantity"] for h in holdings]})
-                    st.plotly_chart(create_portfolio_pie(pie_df), use_container_width=True)
+                    st.plotly_chart(create_portfolio_pie(pie_df), use_container_width=True,
+                                    config={"displayModeBar": False, "responsive": True})
                 except Exception as e:
                     logger.error("Pie: %s", e); st.info("Chart unavailable.")
 
             with col_ret:
                 sec_hdr("Returns by Stock", "green")
                 try:
-                    st.plotly_chart(create_pnl_chart(rows), use_container_width=True)
+                    st.plotly_chart(create_pnl_chart(rows), use_container_width=True,
+                                    config={"displayModeBar": False, "scrollZoom": True, "doubleClick": "reset+autosize", "responsive": True})
                 except Exception as e:
                     logger.error("PnL chart: %s", e); st.info("Chart unavailable.")
 
             st.markdown("---")
             sec_hdr("All Holdings", "blue")
 
-            # Table header
-            st.markdown('<div class="fin-card" style="padding:0;">', unsafe_allow_html=True)
-            st.markdown('<div class="holding-hdr"><div>Stock</div><div>Qty</div><div>Buy ₹</div><div>Now ₹</div><div>P&amp;L ₹</div><div>Return</div><div></div></div>', unsafe_allow_html=True)
+            # Table rendered in one block to prevent Streamlit div interference
+            table_html = '<div class="fin-card" style="padding:0; overflow:hidden;">'
+            table_html += '<div class="scroll-container">'
+            table_html += '<div class="holding-hdr"><div>Stock</div><div>Qty</div><div>Buy ₹</div><div>Now ₹</div><div>P&L ₹</div><div>Return</div><div></div></div>'
             for r in rows:
                 pnl_color = "#10B981" if "+" in r["P&L ₹"] else "#EF4444"
-                st.markdown(f"""
+                table_html += f"""
                 <div class="holding-row">
                   <div>
                     <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:0.86rem;">{r["Symbol"].replace(".NS","")}</div>
@@ -1739,130 +1302,360 @@ elif page == "💼 Portfolio Tracker":
                   <div style="font-family:'JetBrains Mono',monospace;font-size:0.82rem;font-weight:700;color:{pnl_color};">{r["P&L ₹"]}</div>
                   <div style="font-family:'JetBrains Mono',monospace;font-size:0.82rem;font-weight:700;color:{pnl_color};">{r["Return %"]}</div>
                   <div></div>
-                </div>""", unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+                </div>"""
+            table_html += '</div></div>'
+            st.markdown(table_html, unsafe_allow_html=True)
 
             agent = get_agent()
             if agent and not st.session_state.agent_error:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🤖 AI Portfolio Analysis", type="primary"):
-                    if True:
-                        try:    result = agent.analyze_portfolio_with_ai(holdings, cur_px)
-                        except Exception as e:
-                            logger.error("AI portfolio: %s", e)
-                            result = {"error": "Analysis error."}
+                if st.button("🤖 AI Portfolio Analysis", key="portfolio_ai_btn_v2", type="primary"):
+                    try:    result = agent.analyze_portfolio_with_ai(holdings, cur_px)
+                    except: result = {"error": "Analysis error."}
                     if "error" not in result:
                         st.markdown(f'<div class="fin-card fin-card-glow-blue" style="line-height:1.75;font-size:0.88rem;color:var(--text2);">{result["ai_analysis"]}</div>', unsafe_allow_html=True)
-                    else:
-                        st.error(f"❌ {result.get('error','Unavailable')}")
+                    else: st.error(f"❌ {result.get('error', 'Unavailable')}")
 
             st.markdown("---")
             sec_hdr("Remove Holding", "red")
+
             dc1, dc2 = st.columns([4, 1])
             hopts = {f"{r['Symbol']} · ID:{r['ID']}": r["ID"] for r in rows}
-            sel   = dc1.selectbox("Select holding", list(hopts.keys()))
-            if dc2.button("Remove", type="secondary"):
-                res = remove_from_portfolio(hopts[sel])
-                if res["success"]: st.success(res["message"]); st.rerun()
-
+            sel   = dc1.selectbox("Select holding", list(hopts.keys()), index=None, placeholder="Select holding", label_visibility="collapsed")
+            if dc2.button("Remove", key="rm_holding_btn_v2_final", type="secondary", use_container_width=True):
+                if sel is not None:
+                    res = remove_from_portfolio(hopts[sel])
+                    if res["success"]: st.success(res["message"]); st.rerun()
+                else:
+                    st.warning("⚠️ Please select a holding to remove.")
 
 # ═══════════════════════════════════════════════════════════
 #  ⭐ WATCHLIST
 # ═══════════════════════════════════════════════════════════
-elif page == "⭐ Watchlist":
-    page_header("Monitoring Centre", "Watchlist", "Live prices, AI signals and trend tracking")
+elif page == "Watchlist":
+    page_header("TERMINAL", "Market Watchlist", "Professional High-Density Monitoring")
 
-    with st.expander("➕ Add Stock to Watchlist", expanded=False):
-        wc1, wc2, wc3 = st.columns([1.8, 3, 1])
-        w_sym  = wc1.text_input("Symbol",          placeholder="TATAPOWER.NS")
-        w_note = wc2.text_input("Note (optional)",  placeholder="Waiting for pullback near support")
-        with wc3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Add ➕", type="primary"):
-                if w_sym:
-                    ok, norm = validate_symbol(w_sym)
-                    if ok:
-                        try:
-                            p     = get_stock_price(norm)
-                            cname = p.get("company_name", norm) if "error" not in p else norm
-                        except:
-                            cname = norm
-                        try:
-                            res = add_to_watchlist(norm, cname, w_note)
-                            if res["success"]: st.success(res["message"]); st.rerun()
+    # ── WATCHLIST CSS — Premium Terminal Design ────
+    st.markdown("""
+    <style>
+    @keyframes wl-blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+    /* ── LIVE BADGE ── */
+    .wl-live-badge {
+        display: inline-flex; align-items: center; gap: 8px;
+        background: rgba(14,165,233,0.07);
+        border: 1px solid rgba(14,165,233,0.2);
+        border-radius: 50px; padding: 6px 16px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.6rem; color: var(--blue2);
+        font-weight: 600; letter-spacing: 0.12em;
+        text-transform: uppercase; margin: 0 auto 1.2rem auto;
+    }
+    .wl-live-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--blue); box-shadow: 0 0 8px var(--blue);
+        animation: wl-blink 2s ease-in-out infinite; flex-shrink: 0;
+    }
+
+    /* ── WRAPPER ── */
+    .wl-wrapper { max-width: 820px; }
+
+    /* ── SHARED GRID ── */
+    .wl-col-hdr,
+    .wl-card-body {
+        display: grid;
+        grid-template-columns: 32px 1fr 110px 90px 75px;
+        align-items: center;
+        gap: 0 16px;
+    }
+
+    /* ── STICKY COLUMN HEADER ── */
+    .wl-col-hdr {
+        position: sticky; top: -1px; z-index: 100;
+        background: #09090b; /* Match terminal background */
+        padding: 12px 20px 8px 20px;
+        margin: 0 auto 6px auto;
+        border-bottom: 1px solid var(--border);
+        max-width: 820px;
+    }
+    .wl-col-hdr span {
+        display: block; width: 100%;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.5rem; color: var(--text4);
+        text-transform: uppercase; letter-spacing: 0.16em; font-weight: 700;
+    }
+    .wl-col-hdr span:nth-child(1) { text-align: center; }
+    .wl-col-hdr span:nth-child(2) { text-align: left; }
+    .wl-col-hdr span:nth-child(3),
+    .wl-col-hdr span:nth-child(4) { text-align: right; }
+    .wl-col-hdr span:nth-child(5) { text-align: center; }
+    @media (max-width: 640px) { .wl-col-hdr { display: none; } }
+
+    /* ── CARD ── */
+    .wl-card {
+        position: relative; overflow: hidden;
+        background: linear-gradient(135deg, rgba(24,24,27,0.9) 0%, rgba(18,18,24,0.95) 100%);
+        backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-top: 1px solid rgba(255,255,255,0.11);
+        border-radius: 14px;
+        margin: 0 auto 10px auto;
+        max-width: 820px;
+        transition: all 0.22s cubic-bezier(0.4,0,0.2,1);
+        box-shadow: 0 2px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+    .wl-card::before {
+        content: \'\'; position: absolute; inset: 0;
+        background: linear-gradient(105deg, rgba(255,255,255,0.025) 0%, transparent 50%);
+        pointer-events: none; z-index: 0; border-radius: 14px;
+    }
+    .wl-card::after {
+        content: \'\'; position: absolute;
+        left: 0; top: 8px; bottom: 8px; width: 3px; z-index: 1;
+        background: var(--wl-accent, var(--blue));
+        box-shadow: 0 0 16px var(--wl-accent, var(--blue));
+        border-radius: 0 3px 3px 0;
+    }
+    .wl-card:hover {
+        border-color: rgba(255,255,255,0.16);
+        transform: translateY(-2px) scale(1.002);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06), inset 0 1px 0 rgba(255,255,255,0.08);
+        background: linear-gradient(135deg, rgba(30,30,38,0.95) 0%, rgba(22,22,30,0.98) 100%);
+    }
+    .wl-card:hover::after { box-shadow: 0 0 24px var(--wl-accent, var(--blue)); }
+
+    /* ── CARD BODY ── */
+    .wl-card-body {
+        position: relative; z-index: 2;
+        padding: 14px 20px 14px 22px;
+    }
+
+    /* ── RANK ── */
+    .wl-rank {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.55rem; font-weight: 600;
+        color: var(--text4); text-align: center;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 6px; padding: 3px 0;
+    }
+
+    /* ── IDENTITY ── */
+    .wl-id { min-width: 0; overflow: hidden; }
+    .wl-sym {
+        font-family: "Outfit", sans-serif;
+        font-size: 1.05rem; font-weight: 800; color: #fff;
+        letter-spacing: -0.4px; line-height: 1.1;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .wl-name-sub {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.6rem; color: var(--text4);
+        margin-top: 3px; letter-spacing: 0.03em;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ── PRICE & CHANGE columns ── */
+    .wl-price-block { text-align: right; }
+    .wl-price {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.95rem; font-weight: 700; color: #fff;
+        letter-spacing: -0.5px; line-height: 1.2; white-space: nowrap;
+    }
+    .wl-chg {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.68rem; font-weight: 700;
+        margin-top: 3px; white-space: nowrap; text-align: right;
+    }
+
+    /* ── SIGNAL ── */
+    .wl-sig-wrap { text-align: center; }
+    .wl-sig {
+        display: inline-flex; align-items: center; justify-content: center;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.58rem; font-weight: 800; letter-spacing: 0.1em;
+        padding: 5px 0; border-radius: 8px; white-space: nowrap;
+        width: 100%; min-width: 52px;
+        transition: box-shadow 0.2s;
+    }
+    .wl-card:hover .wl-sig { box-shadow: 0 0 16px var(--wl-accent, var(--blue)); }
+
+    /* ── SPACER/MOBILE HELPERS ── */
+    .wl-spacer { display: none; }
+    .wl-name-mobile { display: none; }
+
+    /* ── EMPTY STATE ── */
+    .wl-empty {
+        background: var(--surface); border: 1px dashed rgba(255,255,255,0.08);
+        border-radius: var(--r16); padding: 3.5rem 1.5rem;
+        text-align: center; margin: 0 auto 1rem auto; max-width: 820px;
+    }
+    .wl-empty-icon { font-size: 2.2rem; opacity: 0.4; margin-bottom: 0.8rem; }
+    .wl-empty-text {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.72rem; color: var(--text4);
+        text-transform: uppercase; letter-spacing: 0.1em; line-height: 1.8;
+    }
+
+    /* ── MOBILE ── */
+    @media (max-width: 640px) {
+        .wl-wrapper { max-width: 100%; }
+        .wl-card { max-width: 100%; }
+        .wl-col-hdr { display: none; }
+        .wl-card-body {
+            grid-template-columns: 16px 1fr 62px 52px 40px;
+            padding: 7px 6px;
+            gap: 0 3px;
+        }
+        .wl-sym { font-size: 0.78rem; }
+        .wl-rank { font-size: 0.45rem; width: 16px; padding: 2px 0; }
+        .wl-price { font-size: 0.78rem; }
+        .wl-chg { font-size: 0.58rem; }
+        .wl-sig { font-size: 0.5rem; min-width: 38px; padding: 4px 0; }
+        .wl-name-sub { font-size: 0.5rem; margin-top: 1px; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── ACTION SECTION (ADD) ───────────────────────────
+    def render_watchlist_add_logic():
+        with st.expander("➕ Add New Asset", expanded=False):
+            ca1, ca2 = st.columns([1.2, 2.2])
+            with ca1:
+                sym_in = st.text_input("Symbol", placeholder="RELIANCE.NS", key="wl_add_sym_vstable", label_visibility="collapsed").upper().strip()
+            with ca2:
+                note_in = st.text_input("Note (optional)", placeholder="e.g. Long-term", key="wl_add_note_vstable", label_visibility="collapsed")
+            if st.button("Add to Watchlist ➕", use_container_width=True, type="primary", key="wl_add_btn_vstable"):
+                if sym_in:
+                    with st.spinner("Validating..."):
+                        ok, norm = validate_symbol(sym_in)
+                        if ok:
+                            p  = get_stock_price(norm)
+                            cn = p.get("company_name", norm) if "error" not in p else norm
+                            res = add_to_watchlist(norm, cn, note_in)
+                            if res["success"]:
+                                st.toast(f"📈 {sym_in} added!", icon="✅")
+                                time.sleep(0.3); st.rerun()
                             else: st.error(res["message"])
-                        except Exception as e:
-                            st.error(f"❌ {e}")
+                        else: st.error("❌ Invalid symbol")
+                else: st.warning("Symbol required.")
 
-    watchlist = get_watchlist()
-    if not watchlist:
-        st.info("📭 Watchlist empty. Add stocks above.")
+    if hasattr(st, "fragment"):
+        st.fragment()(render_watchlist_add_logic)()
     else:
-        st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem;">
-          <span class="badge badge-blue">WATCHING {len(watchlist)} STOCKS</span>
-          <span class="badge badge-live">● LIVE</span>
+        render_watchlist_add_logic()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    def render_watchlist_fragment():
+        watchlist = get_watchlist()
+
+        if not watchlist:
+            st.markdown("""
+            <div class="wl-empty">
+              <div class="wl-empty-icon">📭</div>
+              <div class="wl-empty-text">Watchlist is empty<br>
+                <span style="color:var(--text4);font-size:0.65rem;">Add assets below to start monitoring</span>
+              </div>
+            </div>""", unsafe_allow_html=True)
+            return
+
+        symbols = [item["symbol"] for item in watchlist]
+        with st.spinner("Syncing terminal..."):
+            prices = batch_fetch_prices(symbols)
+
+
+
+        # Desktop column headers
+        st.markdown("""
+        <div class="wl-col-hdr">
+          <span>#</span><span>Symbol</span>
+          <span>Price</span><span>Change</span><span>Signal</span>
         </div>""", unsafe_allow_html=True)
 
-        if True:
-            wl_data = {}
-            for item in watchlist:
-                s = item["symbol"]
-                try:    wl_data[s] = {"price": get_stock_price(s), "signal": get_trading_signal(s)}
-                except: wl_data[s] = {"price":{"error":"N/A"}, "signal":{"error":"N/A"}}
+        # ── One card per watchlist item ───────────────────────
+        for idx, item in enumerate(watchlist):
+            s      = item["symbol"]
+            p_data = prices.get(s, {"current_price": 0, "change_pct": 0})
+            px     = p_data.get("current_price", 0)
+            chg    = p_data.get("change_pct", 0)
+            name   = item.get("company_name", s)
 
-        # Table inside a card
-        st.markdown('<div class="fin-card" style="padding:0;overflow:hidden;">', unsafe_allow_html=True)
-        st.markdown('<div class="wl-hdr"><div>Stock</div><div>Price</div><div>Change</div><div>AI Signal</div><div>Trend</div><div></div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            px_txt    = f"₹{px:,.2f}" if px else "—"
+            chg_txt   = f"{chg:+.2f}%"
+            trend_ico = "▲" if chg >= 0 else "▼"
+            sym_short  = s.replace(".NS", "").replace(".BO", "")
+            name_short = name[:28]
 
-        for item in watchlist:
-            sym        = item["symbol"]
-            pd_        = wl_data[sym]["price"]
-            sd_        = wl_data[sym]["signal"]
-            cols       = st.columns([2, 1.5, 1, 1.8, 1.2, 0.6])
+            sig     = "BUY"  if chg > 1.0 else ("SELL" if chg < -1.0 else "HOLD")
+            sig_raw = "#10B981" if sig == "BUY" else ("#EF4444" if sig == "SELL" else "#F59E0B")
 
-            cols[0].markdown(f"""<div style="padding:0.65rem 0;">
-              <div style="font-family:'Outfit',sans-serif;font-weight:700;color:var(--text);font-size:0.86rem;">{sym.replace('.NS','')}</div>
-              <div style="font-size:0.67rem;color:var(--text3);">{item.get('company_name','')[:18]}</div>
+            st.markdown(f"""
+            <div class="wl-card" style="--wl-accent:{sig_raw};">
+              <div class="wl-card-body">
+                <div class="wl-rank">{idx+1:02d}</div>
+                <div class="wl-id">
+                  <div class="wl-sym">{sym_short}</div>
+                  <div class="wl-name-sub">{name_short}</div>
+                </div>
+                <div class="wl-price-block">
+                  <div class="wl-price">{px_txt}</div>
+                </div>
+                <div class="wl-price-block">
+                  <div class="wl-chg" style="color:{sig_raw};">{trend_ico} {chg_txt}</div>
+                </div>
+                <div class="wl-sig-wrap">
+                  <span class="wl-sig" style="background:{sig_raw}12;color:{sig_raw};border:1px solid {sig_raw}30;">{sig}</span>
+                </div>
+              </div>
             </div>""", unsafe_allow_html=True)
 
-            if "error" not in pd_:
-                px  = pd_["current_price"]; ch = pd_["change_pct"]
-                cc  = "#10B981" if ch >= 0 else "#EF4444"
-                cols[1].markdown(f"<div style='padding:0.65rem 0;font-family:\"JetBrains Mono\",monospace;font-weight:600;color:var(--text);font-size:0.84rem;'>₹{px:,.2f}</div>", unsafe_allow_html=True)
-                cols[2].markdown(f"<div style='padding:0.65rem 0;color:{cc};font-weight:700;font-size:0.82rem;'>{'▲' if ch>=0 else '▼'} {abs(ch):.2f}%</div>", unsafe_allow_html=True)
-            else:
-                cols[1].markdown("<div style='padding:0.65rem 0;color:var(--text4);'>N/A</div>", unsafe_allow_html=True)
-                cols[2].markdown("<div style='padding:0.65rem 0;color:var(--text4);'>—</div>", unsafe_allow_html=True)
+    # Apply fragment decorator
+    if hasattr(st, "fragment"):
+        render_watchlist_fragment = st.fragment()(render_watchlist_fragment)
 
-            if "error" not in sd_:
-                sc  = sd_["signal_color"]
-                cols[3].markdown(f"""<div style="padding:0.65rem 0;">
-                  <span style="background:{sc}1A;border:1px solid {sc}55;border-radius:7px;padding:3px 9px;
-                               font-family:'Outfit',sans-serif;font-weight:800;font-size:0.78rem;color:{sc};">
-                    {sd_["signal_emoji"]} {sd_["signal"]}
-                  </span>
-                  <div style="font-family:'JetBrains Mono',monospace;font-size:0.62rem;color:var(--text3);margin-top:3px;">{sd_['confidence']}% conf.</div>
-                </div>""", unsafe_allow_html=True)
-                is_bull   = sd_.get("sma20",0) > sd_.get("sma50",0)
-                tc        = "#10B981" if is_bull else "#EF4444"
-                tl        = "🔼 Bullish" if is_bull else "🔽 Bearish"
-                cols[4].markdown(f"<div style='padding:0.65rem 0;color:{tc};font-weight:600;font-size:0.8rem;'>{tl}</div>", unsafe_allow_html=True)
+    render_watchlist_fragment()
 
-            if cols[5].button("🗑️", key=f"rm_{sym}"):
-                remove_from_watchlist(sym); st.rerun()
+    # ── ACTION SECTION (ADD/REMOVE) ───────────────────────────
+    def render_watchlist_actions_logic():
+        # Remove Section
+        wl = get_watchlist()
+        if wl:
+            st.markdown("<br>", unsafe_allow_html=True)
+            sec_hdr("Remove Asset", "red")
+            rm_opts = {f"{item['symbol'].replace('.NS','').replace('.BO','')} · {item['symbol']}": item["symbol"] for item in wl}
+            rc1, rc2 = st.columns([4, 1])
+            rm_sel = rc1.selectbox("Select asset to remove", list(rm_opts.keys()), index=None, placeholder="Select stock", key="wl_rm_sel_stable", label_visibility="collapsed")
+            if rc2.button("Remove", key="wl_rm_btn_stable", type="secondary", use_container_width=True):
+                if rm_sel is not None:
+                    res = remove_from_watchlist(rm_opts[rm_sel])
+                    if res.get("success"):
+                        st.toast(f"🗑️ {rm_sel.split(' ·')[0]} removed", icon="✅")
+                        time.sleep(0.2); st.rerun()
+                    else: st.toast(f"⚠️ {res.get('message','Failed')}", icon="⚠️")
+                else:
+                    st.warning("⚠️ Please select an asset to remove.")
 
-            st.markdown("<div style='height:1px;background:var(--border);margin:0 1rem;'></div>", unsafe_allow_html=True)
+
+    if hasattr(st, "fragment"):
+        st.fragment()(render_watchlist_actions_logic)()
+    else:
+        render_watchlist_actions_logic()
+
+
+
+
+
+
+
+
 
 
 # ═══════════════════════════════════════════════════════════
 #  📋 MARKET BRIEF
 # ═══════════════════════════════════════════════════════════
-elif page == "📋 Market Brief":
+elif page == "Market Brief":
     page_header("Daily Digest", "AI Market Brief", "AI-generated market summary with movers & macro context")
-
-    gen_btn = st.button("⚡ Generate Today's Brief", type="primary")
 
     st.markdown("---")
 
@@ -1969,6 +1762,9 @@ elif page == "📋 Market Brief":
 
     st.markdown("---")
 
+    st.markdown("<br>", unsafe_allow_html=True)
+    gen_btn = st.button("⚡ Generate Today's Brief", type="primary", use_container_width=True)
+
     if gen_btn:
         agent = get_agent()
         if agent and not st.session_state.agent_error:
@@ -1998,21 +1794,21 @@ elif page == "📋 Market Brief":
 # ═══════════════════════════════════════════════════════════
 #  🧮 CALCULATORS
 # ═══════════════════════════════════════════════════════════
-elif page == "🧮 Calculators":
+elif page == "Calculators":
     page_header("Financial Tools", "Calculators", "SIP projection · Capital gains tax estimator")
 
-    calc_type = st.radio("Type", ["💰 SIP Calculator", "🏛️ Capital Gains Tax"], horizontal=True)
+    calc_options = ["💰 SIP Calculator", "🏛️ Capital Gains Tax"]
+    calc_type = st.selectbox("Calculator Type", calc_options, label_visibility="collapsed")
+
 
     if calc_type == "💰 SIP Calculator":
         sec_hdr("SIP Return Calculator", "green")
 
-        # Inputs in a card
-        st.markdown('<div class="fin-card">', unsafe_allow_html=True)
+        # Inputs
         ci1, ci2, ci3 = st.columns(3)
         monthly_sip   = ci1.number_input("Monthly SIP (₹)", min_value=100, value=5000, step=500)
         annual_return = ci2.slider("Expected Return (%)", 4.0, 25.0, 12.0, 0.5)
         years         = ci3.slider("Duration (Years)",    1,   30,   10)
-        st.markdown('</div>', unsafe_allow_html=True)
 
         if st.button("📊 Calculate Returns", type="primary"):
             result = calculate_sip(monthly_sip, annual_return, years)
@@ -2033,14 +1829,12 @@ elif page == "🧮 Calculators":
 
     else:
         sec_hdr("Capital Gains Tax Calculator", "amber")
-        st.markdown('<div class="fin-card fin-card-glow-amber" style="margin-bottom:1rem;">', unsafe_allow_html=True)
         st.caption("LTCG (12.5%) applies after 1 year · STCG (20%) for ≤1 year — as per Indian tax law")
         tc1, tc2, tc3, tc4 = st.columns(4)
         buy_pt       = tc1.number_input("Buy Price (₹)",  min_value=1.0, value=500.0)
         sell_pt      = tc2.number_input("Sell Price (₹)", min_value=1.0, value=700.0)
         qty_t        = tc3.number_input("Quantity",       min_value=1,   value=100)
         holding_days = tc4.number_input("Holding Days",   min_value=1,   value=400)
-        st.markdown('</div>', unsafe_allow_html=True)
 
         if st.button("🧮 Calculate Tax", type="primary"):
             tax = calculate_tax_implications(buy_pt, sell_pt, qty_t, holding_days)
@@ -2077,7 +1871,7 @@ elif page == "🧮 Calculators":
 # ═══════════════════════════════════════════════════════════
 #  🤖 AI CHAT  ─  NEW PREMIUM DESIGN
 # ═══════════════════════════════════════════════════════════
-elif page == "🤖 AI Chat":
+elif page == "AI Chat":
 
     # ── Page Header ───────────────────────────────────────
     page_header("Intelligent Assistant", "FinSaarthi AI", "Ask anything about Indian stocks, markets & investing")
@@ -2099,7 +1893,7 @@ elif page == "🤖 AI Chat":
       <div style="display:flex;align-items:center;gap:16px;">
         <span style="font-size:0.72rem;color:var(--text4);">{history_count // 2} conversation{'s' if history_count // 2 != 1 else ''}</span>
         <div style="display:flex;align-items:center;gap:5px;">
-          <div style="width:5px;height:5px;border-radius:50%;background:#3B82F6;"></div>
+          <div style="width:5px;height:5px;border-radius:50%;background:var(--blue);"></div>
           <span style="font-size:0.7rem;color:var(--text4);">Powered by LangChain</span>
         </div>
       </div>
@@ -2120,13 +1914,55 @@ elif page == "🤖 AI Chat":
             wrap_cls   = "user-wrap"   if is_user else ""
             avatar_cls = "user-avatar" if is_user else "ai-avatar"
             avatar_icon = "U" if is_user else "📈"
-            content = str(msg["content"]).replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+            raw = str(msg["content"])
+            if not is_user:
+                import re
+                # Convert markdown to HTML for AI messages
+                raw = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', raw)
+                raw = re.sub(r'\*(.+?)\*', r'<em>\1</em>', raw)
+                raw = re.sub(r'^### (.+)$', r'<h4 style="margin:0.6rem 0 0.2rem;color:var(--text)">\1</h4>', raw, flags=re.MULTILINE)
+                raw = re.sub(r'^## (.+)$',  r'<h3 style="margin:0.6rem 0 0.2rem;color:var(--text)">\1</h3>', raw, flags=re.MULTILINE)
+                raw = re.sub(r'^# (.+)$',   r'<h2 style="margin:0.6rem 0 0.2rem;color:var(--text)">\1</h2>', raw, flags=re.MULTILINE)
+                
+                # Wrap lists correctly
+                if "- " in raw:
+                    def wrap_list(m):
+                        inner = re.sub(r"^- (.+)$", r"<li>\1</li>", m.group(0), flags=re.MULTILINE)
+                        return '<ul style="margin:0.5rem 0;padding-left:1.2rem;">' + inner + '</ul>'
+                    raw = re.sub(r'(?:^- .+(?:\n|$))+', wrap_list, raw, flags=re.MULTILINE)
+                
+                raw = raw.replace('\n', '<br>')
+                # Clean up artifacts
+                raw = raw.replace('</ul><br>', '</ul>')
+                raw = raw.replace('</li><br>', '</li>')
+                for h in range(1, 5):
+                    raw = raw.replace(f'</h{h}><br>', f'</h{h}>')
+                content = raw
+            else:
+                content = raw.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+            
+            # Calculate dynamic timestamp
+            import time
+            ts = msg.get("timestamp", time.time())
+            diff = int(time.time() - ts)
+            if diff < 60:
+                time_str = "just now"
+            elif diff < 3600:
+                mins = diff // 60
+                time_str = f"{mins} min{'s' if mins > 1 else ''} ago"
+            elif diff < 86400:
+                hrs = diff // 3600
+                time_str = f"{hrs} hr{'s' if hrs > 1 else ''} ago"
+            else:
+                days = diff // 86400
+                time_str = f"{days} day{'s' if days > 1 else ''} ago"
+
             chat_html += f"""
             <div class="chat-msg-wrap {wrap_cls}">
               <div class="chat-avatar {avatar_cls}">{avatar_icon}</div>
               <div>
                 <div class="chat-bubble {bubble_cls}">{content}</div>
-                <div class="chat-meta">{'You' if is_user else 'FinSaarthi AI'} · just now</div>
+                <div class="chat-meta">{'You' if is_user else 'FinSaarthi AI'} · {time_str}</div>
               </div>
             </div>"""
         chat_html += '</div>'
@@ -2155,7 +1991,8 @@ elif page == "🤖 AI Chat":
         q = (user_input or prefill).strip()
         # Clear input box after send
         st.session_state["_chat_draft"] = ""
-        st.session_state.chat_history.append({"role": "user", "content": q})
+        import time
+        st.session_state.chat_history.append({"role": "user", "content": q, "timestamp": time.time()})
         agent = get_agent()
         if agent:
             if True:
@@ -2174,7 +2011,7 @@ elif page == "🤖 AI Chat":
                     resp = "⚠️ Error processing your question. Please try again."
         else:
             resp = "⚠️ LLM not configured. Please add your API key in `.env` to enable AI responses."
-        st.session_state.chat_history.append({"role": "assistant", "content": resp})
+        st.session_state.chat_history.append({"role": "assistant", "content": resp, "timestamp": time.time()})
         st.rerun()
 
     # ── Action Row ────────────────────────────────────────
@@ -2188,18 +2025,254 @@ elif page == "🤖 AI Chat":
                     st.session_state.agent.clear_memory()
                 st.rerun()
         with col_exp:
-            export_lines = []
-            for m in st.session_state.chat_history:
-                role = "You" if m["role"] == "user" else "FinSaarthi AI"
-                export_lines.append(f"[{role}]\n{m['content']}\n")
-            chat_txt = "\n".join(export_lines)
-            st.download_button(
-                "⬇️ Export Conversation",
-                data=chat_txt,
-                file_name="finsaarthi_chat.txt",
-                mime="text/plain",
-                use_container_width=True,
-            )
+            # ── Generate Modern PDF ──────────────────────────
+            def generate_chat_pdf(history):
+                import io, re, datetime
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors
+                from reportlab.lib.units import mm
+                from reportlab.lib.styles import ParagraphStyle
+                from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+                from reportlab.platypus import (
+                    SimpleDocTemplate, Paragraph, Spacer,
+                    HRFlowable, Table, TableStyle, KeepTogether
+                )
+                from reportlab.pdfbase import pdfmetrics
+                from reportlab.pdfbase.ttfonts import TTFont
+                from reportlab.pdfgen import canvas as pdfcanvas
+
+                # Register Arial (Unicode — supports ₹)
+                try:
+                    pdfmetrics.registerFont(TTFont("Arial",    "C:/Windows/Fonts/arial.ttf"))
+                    pdfmetrics.registerFont(TTFont("ArialBd",  "C:/Windows/Fonts/arialbd.ttf"))
+                    pdfmetrics.registerFont(TTFont("ArialIt",  "C:/Windows/Fonts/ariali.ttf"))
+                    BASE, BOLD, ITALIC = "Arial", "ArialBd", "ArialIt"
+                except Exception:
+                    BASE, BOLD, ITALIC = "Helvetica", "Helvetica-Bold", "Helvetica-Oblique"
+
+                # ── Colour palette ──────────────────────────
+                BG        = colors.HexColor("#0A0F1E")
+                ACCENT    = colors.HexColor("#10B981")   # green
+                USER_C    = colors.HexColor("#6366F1")   # indigo
+                AI_C      = colors.HexColor("#10B981")
+                USER_BG   = colors.HexColor("#1E1B4B")
+                AI_BG     = colors.HexColor("#0F1929")
+                TEXT_MAIN = colors.HexColor("#E2E8F0")
+                TEXT_SUB  = colors.HexColor("#94A3B8")
+                LINE_C    = colors.HexColor("#1E3A5F")
+                WHITE     = colors.HexColor("#FFFFFF")
+
+                W, H = A4
+                LM, RM, TM, BM = 18*mm, 18*mm, 22*mm, 22*mm
+                PW = W - LM - RM  # printable width
+
+                # ── Helper: strip markdown ──────────────────
+                def clean(text):
+                    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+                    text = re.sub(r'\*(.+?)\*',     r'\1', text)
+                    text = re.sub(r'^#{1,3} ',       '',   text, flags=re.MULTILINE)
+                    text = re.sub(r'<[^>]+>',        '',   text)
+                    text = re.sub(r'-{2,}',          '—',  text)
+                    return text.strip()
+
+                # ── Canvas callback for recurring footer/page numbers ──
+                class HeaderFooter:
+                    def __init__(self):
+                        self.ts = datetime.datetime.now().strftime("%d %b %Y · %I:%M %p")
+                    def __call__(self, canv, doc):
+                        canv.saveState()
+                        pg = doc.page
+                        # Minimal recurring header for subsequent pages
+                        if pg > 1:
+                            canv.setFillColor(colors.HexColor("#080C16"))
+                            canv.rect(0, H - 12*mm, W, 12*mm, fill=1, stroke=0)
+                            canv.setFont(BOLD, 9)
+                            canv.setFillColor(WHITE)
+                            canv.drawString(LM, H - 8*mm, "FinSaarthi AI")
+                            canv.setFont(BASE, 7)
+                            canv.setFillColor(colors.HexColor("#94A3B8"))
+                            canv.drawRightString(W - RM, H - 8*mm, f"Continued · {self.ts}")
+
+                        # Recurring Footer
+                        canv.setFont(BASE, 7)
+                        canv.setFillColor(colors.HexColor("#64748B"))
+                        canv.drawCentredString(W/2, BM - 8*mm,
+                            "Confidential AI Analysis · FinSaarthi Insights · Not SEBI registered advice")
+                        canv.setFont(BOLD, 7.5)
+                        canv.setFillColor(ACCENT)
+                        canv.drawRightString(W - RM, BM - 8*mm, f"PAGE {pg}")
+                        canv.restoreState()
+
+                hf = HeaderFooter()
+
+                buf = io.BytesIO()
+                doc = SimpleDocTemplate(
+                    buf, pagesize=A4,
+                    leftMargin=LM, rightMargin=RM,
+                    topMargin=20*mm, bottomMargin=BM + 6*mm,
+                    onFirstPage=hf, onLaterPages=hf,
+                )
+
+                # ── Styles ──────────────────────────────────
+                def S(name, **kw):
+                    defaults = dict(fontName=BASE, fontSize=9.5, textColor=TEXT_MAIN, leading=15)
+                    defaults.update(kw)
+                    return ParagraphStyle(name, **defaults)
+
+                sTitleMain = S("stm", fontSize=22, fontName=BOLD, textColor=WHITE, alignment=TA_LEFT)
+                sTitleSub  = S("sts", fontSize=8,  fontName=BASE, textColor=colors.HexColor("#94A3B8"), alignment=TA_RIGHT)
+                sBadge     = S("sbd", fontSize=6,  fontName=BOLD, textColor=colors.HexColor("#93C5FD"), alignment=TA_CENTER)
+                sLabel     = S("lbl", fontSize=7.5, fontName=BOLD, spaceAfter=2)
+                sUser   = S("utx",  textColor=colors.HexColor("#C7D2FE"), spaceAfter=0)
+                sAI     = S("aitx", textColor=colors.HexColor("#D1FAE5"), spaceAfter=0)
+                sHead   = S("hd",   fontSize=10,  fontName=BOLD, textColor=WHITE, spaceAfter=1, spaceBefore=4)
+                sBullet = S("bl",   leftIndent=8, spaceAfter=1, bulletIndent=2)
+
+                def parse_ai(text):
+                    """Convert markdown lines → Paragraphs with robust tag handling."""
+                    import html
+                    items = []
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            items.append(Spacer(1, 2))
+                            continue
+                        
+                        # 1. HTML Escape to prevent literal < or > from breaking ReportLab
+                        t = html.escape(line)
+                        
+                        # 2. Match headers
+                        hm = re.match(r'^#{1,3}\s+(.*)', t)
+                        if hm:
+                            inner = hm.group(1)
+                            inner = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', inner)
+                            items.append(Paragraph(inner, sHead))
+                            continue
+                            
+                        # 3. Match bullets
+                        bm = re.match(r'^[-•]\s+(.*)', t)
+                        if bm:
+                            inner = bm.group(1)
+                            inner = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', inner)
+                            items.append(Paragraph(f"• {inner}", sBullet))
+                            continue
+                            
+                        # 4. Normal text with bold/italic
+                        t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
+                        t = re.sub(r'\*(.+?)\*',     r'<i>\1</i>', t)
+                        
+                        # Final check for balanced tags to avoid ReportLab ValueError
+                        # If tags are unbalanced (e.g. <b> without </b>), Paragraph() will still fail.
+                        # We try to build it, and if it fails, we fall back to raw escaped text.
+                        try:
+                            items.append(Paragraph(t, sAI))
+                        except Exception:
+                            items.append(Paragraph(html.escape(line), sAI))
+                    return items
+
+                # ── Build story ──────────────────────────────
+                story = []
+                
+                # ── Bulletproof Branding Header ───────────────
+                # Using a Table instead of Canvas for 100% reliability
+                branding_data = [
+                    [
+                        Paragraph(f"<font color='#FFFFFF'>Fin</font><font color='#10B981'>Saarthi AI</font>", sTitleMain),
+                        Paragraph(f"CONVERSATION REPORT<br/>Generated: {datetime.datetime.now().strftime('%d %b %Y · %I:%M %p')}", sTitleSub)
+                    ]
+                ]
+                brand_t = Table(branding_data, colWidths=[PW*0.6, PW*0.4])
+                brand_t.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#080C16")),
+                    ("LEFTPADDING", (0,0), (0,0), 10),
+                    ("RIGHTPADDING", (1,0), (1,0), 10),
+                    ("TOPPADDING", (0,0), (-1,-1), 12),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 12),
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    # Left green accent line
+                    ("LINEBEFORE", (0,0), (0,0), 3, ACCENT),
+                ]))
+                story.append(brand_t)
+                
+                # Subtle secondary bar
+                badge_p = Paragraph("INSTITUTIONAL GRADE • SECURE REPORT • VERIFIED AI INSIGHTS", sBadge)
+                badge_t = Table([[badge_p]], colWidths=[PW])
+                badge_t.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#1E3A8A")),
+                    ("TOPPADDING", (0,0), (-1,-1), 2),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                    ("BOTTOMBORDER", (0,0), (-1,-1), 1, ACCENT),
+                ]))
+                story.append(badge_t)
+                story.append(Spacer(1, 10*mm))
+
+                for idx, msg in enumerate(history):
+                    is_user = msg["role"] == "user"
+                    raw = msg["content"]
+
+                    if is_user:
+                        lbl_text = "YOU"
+                        lbl_color = USER_C
+                        bg_color = USER_BG
+                        border_color = USER_C
+                        # User messages are usually short, but still...
+                        body_paras = [Paragraph(clean(raw), sUser)]
+                    else:
+                        lbl_text = "FINSAARTHI AI"
+                        lbl_color = AI_C
+                        bg_color = AI_BG
+                        border_color = AI_C
+                        body_paras = parse_ai(raw)
+
+                    # Header row for the message
+                    lbl_para = Paragraph(lbl_text, ParagraphStyle(
+                        f"lbl{idx}", fontName=BOLD, fontSize=7,
+                        textColor=lbl_color, spaceAfter=2))
+                    
+                    # Construct table rows: [Strip, Content]
+                    # Row 0: Label
+                    # Row 1-N: Body paragraphs
+                    table_data = [["", lbl_para]]
+                    for p in body_paras:
+                        table_data.append(["", p])
+
+                    # Create the table
+                    # Col 0: 2mm wide strip, Col 1: PW - 2mm content
+                    t = Table(table_data, colWidths=[2*mm, PW - 2*mm], splitByRow=1)
+                    
+                    # Style the table to look like a card
+                    t_style = [
+                        # Strip background (Col 0)
+                        ("BACKGROUND", (0, 0), (0, -1), border_color),
+                        # Main background (Col 1)
+                        ("BACKGROUND", (1, 0), (1, -1), bg_color),
+                        # Alignment and padding
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                        ("RIGHTPADDING", (1, 0), (1, -1), 10),
+                        ("TOPPADDING", (1, 0), (1, 0), 8),      # Label top pad
+                        ("BOTTOMPADDING", (1, -1), (1, -1), 8), # Last para bottom pad
+                        # Intermediate row padding
+                        ("TOPPADDING", (1, 1), (1, -1), 2),
+                        ("BOTTOMPADDING", (1, 0), (1, -2), 2),
+                    ]
+                    t.setStyle(TableStyle(t_style))
+
+                    story.append(t)
+                    story.append(Spacer(1, 4*mm))
+
+                doc.build(story)
+                return buf.getvalue()
+
+            if st.session_state.chat_history:
+                pdf_bytes = generate_chat_pdf(st.session_state.chat_history)
+                st.download_button(
+                    "⬇️ Export as PDF",
+                    data=pdf_bytes,
+                    file_name="finsaarthi_conversation.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
         with col_info:
             msg_count = len([m for m in st.session_state.chat_history if m["role"] == "user"])
             st.markdown(
@@ -2208,19 +2281,3 @@ elif page == "🤖 AI Chat":
                 f"Responses are AI-generated, not SEBI-registered advice.</div>",
                 unsafe_allow_html=True
             )
-
-
-# ═══════════════════════════════════════════════════════════
-#  FOOTER
-# ═══════════════════════════════════════════════════════════
-st.markdown("""
-<div style="text-align:center;padding:1.1rem 0 0.4rem;margin-top:1.5rem;
-            border-top:1px solid #1C2D4F;">
-  <span style="font-family:'JetBrains Mono',monospace;font-size:0.62rem;color:#2E3F62;">
-    📈 &nbsp;<strong style="color:#4B6494;">FinSaarthi v2.0</strong>&nbsp;
-    ·&nbsp; LangChain &nbsp;·&nbsp; Streamlit &nbsp;·&nbsp; yfinance &nbsp;·&nbsp; Plotly
-    &nbsp;·&nbsp;
-    <span style="color:#7F1D1D;">⚠️ Educational only · Not SEBI-registered financial advice</span>
-  </span>
-</div>
-""", unsafe_allow_html=True)
