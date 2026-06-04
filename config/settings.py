@@ -12,20 +12,41 @@ load_dotenv()
 class Settings:
     """Central settings class — reads from .env file."""
 
+    # Helper to get secret safely
+    @staticmethod
+    def get_secret(key: str, default: str = "") -> str:
+        # Check Streamlit secrets first (for cloud deployment)
+        try:
+            import streamlit as st
+            import os
+            
+            # Prevent Streamlit from rendering 'No secrets files found' by ensuring the file exists
+            has_secrets = os.path.exists(".streamlit/secrets.toml") or os.path.exists(os.path.expanduser("~/.streamlit/secrets.toml"))
+            
+            if has_secrets and hasattr(st, "secrets") and key in st.secrets:
+                return st.secrets[key]
+        except Exception:
+            pass
+        # Fallback to local .env
+        import os
+        return os.getenv(key, default)
+
     # --- LLM ---
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")  # or "gemini"
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")  # or "gemini", "groq"
+    OPENAI_API_KEY: str = get_secret.__func__("OPENAI_API_KEY")
+    GROQ_API_KEY: str = get_secret.__func__("GROQ_API_KEY")
+    GOOGLE_API_KEY: str = get_secret.__func__("GOOGLE_API_KEY")
+    GOOGLE_API_KEYS: list = [k.strip() for k in get_secret.__func__("GOOGLE_API_KEY").split(",") if k.strip()]
     LLM_MODEL_OPENAI: str = "gpt-3.5-turbo"
-    LLM_MODEL_GEMINI: str = "gemini-pro"
+    LLM_MODEL_GEMINI: str = "gemini-2.5-flash"
 
     LLM_TEMPERATURE: float = 0.3
 
     # --- News ---
-    NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
+    NEWS_API_KEY: str = get_secret.__func__("NEWS_API_KEY")
 
     # --- Alpha Vantage ---
-    ALPHA_VANTAGE_KEY: str = os.getenv("ALPHA_VANTAGE_KEY", "")
+    ALPHA_VANTAGE_KEY: str = get_secret.__func__("ALPHA_VANTAGE_KEY")
 
     # --- Database ---
     DB_PATH: str = "data/finance_agent.db"
@@ -57,6 +78,36 @@ class Settings:
         "ASIANPAINT.NS": "Asian Paints",
         "TITAN.NS": "Titan Company",
         "ULTRACEMCO.NS": "UltraTech Cement",
+        "ADANIENT.NS": "Adani Enterprises",
+        "ADANIPORTS.NS": "Adani Ports",
+        "AXISBANK.NS": "Axis Bank",
+        "BAJAJ-AUTO.NS": "Bajaj Auto",
+        "BPCL.NS": "BPCL",
+        "CIPLA.NS": "Cipla",
+        "COALINDIA.NS": "Coal India",
+        "DRREDDY.NS": "Dr. Reddy's",
+        "EICHERMOT.NS": "Eicher Motors",
+        "GRASIM.NS": "Grasim Industries",
+        "HCLTECH.NS": "HCL Tech",
+        "HEROMOTOCO.NS": "Hero MotoCorp",
+        "HINDALCO.NS": "Hindalco",
+        "ITC.NS": "ITC",
+        "JSWSTEEL.NS": "JSW Steel",
+        "M&M.NS": "Mahindra & Mahindra",
+        "MARUTI.NS": "Maruti Suzuki",
+        "NESTLEIND.NS": "Nestle India",
+        "NTPC.NS": "NTPC",
+        "ONGC.NS": "ONGC",
+        "POWERGRID.NS": "Power Grid",
+        "SUNPHARMA.NS": "Sun Pharma",
+        "TATAMOTORS.NS": "Tata Motors",
+        "TATASTEEL.NS": "Tata Steel",
+        "TECHM.NS": "Tech Mahindra",
+        "HAL.NS": "Hindustan Aeronautics Limited",
+        "IRFC.NS": "Indian Railway Finance Corporation",
+        "RVNL.NS": "Rail Vikas Nigam Limited",
+        "ZOMATO.NS": "Zomato Limited",
+        "JIOFIN.NS": "Jio Financial Services",
     }
 
     # Indian market sectors
@@ -64,7 +115,7 @@ class Settings:
         "IT": ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"],
         "Banking": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"],
         "FMCG": ["HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "BRITANNIA.NS"],
-        "Auto": ["MARUTI.NS", "TATAMOTORS.NS", "BAJAJ-AUTO.NS", "HEROMOTOCO.NS"],
+        "Auto": ["MARUTI.NS", "M&M.NS", "BAJAJ-AUTO.NS", "HEROMOTOCO.NS"],
         "Energy": ["RELIANCE.NS", "ONGC.NS", "BPCL.NS", "IOC.NS"],
     }
 
