@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from cachetools import TTLCache
 from typing import Optional, List
 from config.settings import settings
@@ -54,111 +54,60 @@ def fetch_with_retry(symbol, retries=2):
 
 def batch_fetch_prices(symbols: List[str]) -> dict:
     """
-    Fetch prices for multiple symbols in parallel using ThreadPoolExecutor.
-    Returns dict: {symbol -> price_dict_or_error_dict}
+    High-performance, robust price fetching for multiple symbols.
+    Uses parallel execution to ensure speed and accuracy.
     """
     results = {}
-    # Check cache first
-    to_fetch = []
-    for sym in symbols:
-        key = f"price_{sym}"
-        if key in _cache:
-            results[sym] = _cache[key]
-        else:
-            to_fetch.append(sym)
+    to_fetch = [s for s in symbols if f"price_{s}" not in _cache]
+    
+    # Add cached items first
+    for s in symbols:
+        if f"price_{s}" in _cache:
+            results[s] = _cache[f"price_{s}"]
 
     if not to_fetch:
         return results
 
-    # Try yfinance bulk download first (much faster for multiple symbols)
-    try:
-        bulk = yf.download(
-            to_fetch,
-            period="5d",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-        )
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
+    def _fetch_single(sym):
+        try:
+            ticker = yf.Ticker(sym)
+            # Fetch 5 days to ensure we have at least 2 points for change calculation
+            hist = ticker.history(period="5d", interval="1d")
+            
+            if hist.empty:
+                # Fallback to fast_info for current price
+                px = ticker.fast_info.get("last_price")
+                if px:
+                    return sym, {
+                        "symbol": sym,
+                        "current_price": round(px, 2),
+                        "change_pct": 0,
+                        "company_name": sym
+                    }
+                return sym, {"error": "No data"}
 
-        for sym in to_fetch:
-            try:
-                if len(to_fetch) == 1:
-                    hist = bulk
-                else:
-                    hist = bulk[sym] if sym in bulk.columns.get_level_values(0) else pd.DataFrame()
+            # Reliable column access
+            cp = float(hist["Close"].iloc[-1])
+            pp = float(hist["Close"].iloc[-2]) if len(hist) > 1 else cp
+            change_pct = ((cp - pp) / pp * 100) if pp else 0
+            
+            return sym, {
+                "symbol": sym,
+                "current_price": round(cp, 2),
+                "change_pct": round(change_pct, 2),
+                "company_name": sym 
+            }
+        except Exception as e:
+            return sym, {"error": str(e)}
 
-                if hist is None or hist.empty:
-                    results[sym] = {"error": f"No data for {sym}"}
-                    continue
-
-                hist = hist.dropna(how="all")
-                if hist.empty:
-                    results[sym] = {"error": f"No data for {sym}"}
-                    continue
-
-                close_col = "Close" if "Close" in hist.columns else hist.columns[-1]
-                current_price = float(hist[close_col].iloc[-1])
-                prev_price = float(hist[close_col].iloc[-2]) if len(hist) > 1 else current_price
-                change = current_price - prev_price
-                change_pct = (change / prev_price) * 100 if prev_price else 0
-
-                # fast_info for 52w data
-                try:
-                    ticker = yf.Ticker(sym)
-                    fast = ticker.fast_info
-                    week_high = getattr(fast, "year_high", "N/A")
-                    week_low  = getattr(fast, "year_low", "N/A")
-                    market_cap = getattr(fast, "market_cap", "N/A")
-                except Exception:
-                    week_high = week_low = market_cap = "N/A"
-
-                try:
-                    info = yf.Ticker(sym).info
-                    company_name = info.get("longName") or info.get("shortName") or sym
-                    pe_ratio = info.get("trailingPE") or info.get("forwardPE") or "N/A"
-                    if isinstance(pe_ratio, float):
-                        pe_ratio = round(pe_ratio, 2)
-                except Exception:
-                    company_name = sym
-                    pe_ratio = "N/A"
-
-                vol_col = "Volume" if "Volume" in hist.columns else None
-                volume = int(hist[vol_col].iloc[-1]) if vol_col else 0
-
-                entry = {
-                    "symbol": sym,
-                    "company_name": company_name,
-                    "current_price": round(current_price, 2),
-                    "previous_close": round(prev_price, 2),
-                    "change": round(change, 2),
-                    "change_pct": round(change_pct, 2),
-                    "volume": volume,
-                    "market_cap": market_cap,
-                    "52_week_high": round(week_high, 2) if isinstance(week_high, float) else week_high,
-                    "52_week_low":  round(week_low, 2)  if isinstance(week_low, float) else week_low,
-                    "year_high": week_high,
-                    "year_low": week_low,
-                    "pe_ratio": pe_ratio,
-                    "currency": "INR",
-                    "timestamp": now_str,
-                }
-                _cache[f"price_{sym}"] = entry
-                results[sym] = entry
-            except Exception as e:
-                results[sym] = {"error": str(e)}
-
-    except Exception:
-        # Fallback: parallel individual fetches
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            future_map = {ex.submit(get_stock_price, sym): sym for sym in to_fetch}
-            for future in as_completed(future_map):
-                sym = future_map[future]
-                try:
-                    results[sym] = future.result()
-                except Exception as e:
-                    results[sym] = {"error": str(e)}
+    # Parallel Fetch using ThreadPoolExecutor for I/O bound yfinance calls
+    with ThreadPoolExecutor(max_workers=min(len(to_fetch), 10)) as executor:
+        futures = {executor.submit(_fetch_single, s): s for s in to_fetch}
+        for future in as_completed(futures):
+            sym, data = future.result()
+            if "error" not in data:
+                _cache[f"price_{sym}"] = data
+            results[sym] = data
 
     return results
 
@@ -166,76 +115,176 @@ def batch_fetch_prices(symbols: List[str]) -> dict:
 # -------------------------------------------------------------
 # STOCK PRICE
 # -------------------------------------------------------------
-@_get_st_cache_data()(ttl=300)
-def get_stock_price(symbol: str) -> dict:
-
-    key = f"price_{symbol}"
+def get_stock_price(symbol: str, target_date: str = None) -> dict:
+    """Get real-time stock price or precise historical data."""
+    key = f"price_{symbol}_{target_date if target_date else 'live'}"
     if key in _cache:
         return _cache[key]
 
     try:
+        # --- PRO LEVEL: NSE Official Data Integration ---
+        if target_date and symbol.endswith(".NS"):
+            try:
+                from nsepython import equity_history
+                nse_symbol = symbol.split(".")[0]
+                # target_date is already DD-MM-YYYY
+                df = equity_history(nse_symbol, "EQ", target_date, target_date)
+                if not df.empty:
+                    price = float(df['CH_CLOSING_PRICE'].iloc[0])
+                    open_price = float(df['CH_OPENING_PRICE'].iloc[0]) if 'CH_OPENING_PRICE' in df.columns else price
+                    return {
+                        "symbol": symbol,
+                        "company_name": nse_symbol,
+                        "current_price": price,
+                        "open_price": open_price,
+                        "change": price - float(df['CH_PREVIOUS_CLS_PRC'].iloc[0]),
+                        "change_pct": ((price / float(df['CH_PREVIOUS_CLS_PRC'].iloc[0])) - 1) * 100,
+                        "previous_close": float(df['CH_PREVIOUS_CLS_PRC'].iloc[0]),
+                        "day_high": float(df['CH_TRADE_HIGH_PRICE'].iloc[0]),
+                        "day_low": float(df['CH_TRADE_LOW_PRICE'].iloc[0]),
+                        "volume": int(df['CH_TOT_TRADED_QTY'].iloc[0]),
+                        "source": "NSE India Official"
+                    }
+            except:
+                pass # Fallback to YFinance if NSE site is down
 
-        ticker, hist = fetch_with_retry(symbol)
-
-        if hist.empty:
-            return {
-                "error": f"No price data found for '{symbol}'."
-            }
+        ticker = yf.Ticker(symbol)
+        if target_date:
+            # Fallback YFinance Logic for non-NSE stocks or if nsepython fails
+            try:
+                dt_obj = datetime.strptime(target_date, "%d-%m-%Y")
+                start_dt = (dt_obj - timedelta(days=7)).strftime("%Y-%m-%d")
+                end_dt = (dt_obj + timedelta(days=2)).strftime("%Y-%m-%d")
+                hist = ticker.history(start=start_dt, end=end_dt, auto_adjust=False)
+                
+                if not hist.empty:
+                    target_ts = pd.Timestamp(dt_obj).tz_localize(hist.index.tz)
+                    available_dates = hist.index[hist.index <= target_ts]
+                    if not available_dates.empty:
+                        hist_row = hist.loc[[available_dates[-1]]]
+                        actual_price = float(hist_row["Close"].iloc[0])
+                        actual_open_price = float(hist_row["Open"].iloc[0]) if "Open" in hist_row.columns else actual_price
+                        
+                        try:
+                            info = ticker.info
+                            company_name = info.get("longName") or info.get("shortName") or symbol
+                            sector = info.get("sector") or info.get("industry") or "N/A"
+                        except:
+                            company_name = symbol
+                            sector = "N/A"
+                            
+                        res_dict = {
+                            "HISTORICAL_DATA": f"{target_date} (Open: {actual_open_price:.1f}, Close: {actual_price:.1f})",
+                            "LIVE_PRICE_TODAY": actual_price,
+                            "PREVIOUS_CLOSE_TODAY": actual_price,
+                            "current_price": actual_price,
+                            "open_price": actual_open_price,
+                            "previous_close": actual_price,
+                            "symbol": symbol,
+                            "company_name": company_name,
+                            "change": 0.0,
+                            "change_pct": 0.0,
+                            "52_week_high": "N/A",
+                            "52_week_low": "N/A",
+                            "market_cap_str": "N/A",
+                            "sector": sector,
+                            "last_closing_date": target_date,
+                            "search_context": f"Sector: {sector}"
+                        }
+                        _cache[key] = res_dict
+                        return res_dict
+                return {"error": "DATA_NOT_FOUND_ON_EXCHANGE"}
+            except Exception as e:
+                return {"error": f"EXCHANGE_DATA_UNAVAILABLE: {e}"}
+        else:
+            hist = ticker.history(period="3mo")
+        
+        # --- PRIMARY DATA FETCH (FAST) ---
+        current_price = prev_price = day_high = day_low = open_price = None
+        market_cap = week_high = week_low = sector = company_name = "N/A"
+        div_yield = 0
 
         try:
             fast = ticker.fast_info
+            current_price = getattr(fast, "last_price", None)
+            open_price = getattr(fast, "open", None)
+            prev_price = getattr(fast, "previous_close", None)
+            day_high = getattr(fast, "day_high", None)
+            day_low = getattr(fast, "day_low", None)
             market_cap = getattr(fast, "market_cap", "N/A")
-            week_high = getattr(fast, "year_high", "N/A")
-            week_low  = getattr(fast, "year_low", "N/A")
-        except:
-            market_cap = "N/A"
-            week_high  = "N/A"
-            week_low   = "N/A"
+            week_high = getattr(fast, "year_high", None) or getattr(fast, "fifty_two_week_high", None)
+            week_low  = getattr(fast, "year_low", None) or getattr(fast, "fifty_two_week_low", None)
+        except: pass
 
+        # --- FALLBACKS (HISTORY & INFO) ---
+        if current_price is None and not hist.empty:
+            current_price = float(hist["Close"].iloc[-1])
+            prev_price = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current_price
+            
+        if open_price is None and not hist.empty:
+            open_price = float(hist["Open"].iloc[-1]) if "Open" in hist.columns else current_price
+        
         try:
             info = ticker.info
             company_name = info.get("longName") or info.get("shortName") or symbol
-            pe_ratio = info.get("trailingPE") or info.get("forwardPE") or "N/A"
-            if isinstance(pe_ratio, float):
-                pe_ratio = round(pe_ratio, 2)
-        except:
-            company_name = symbol
-            pe_ratio = "N/A"
+            sector = info.get("sector") or info.get("industry") or "N/A"
+            div_yield = info.get("dividendYield") or info.get("trailingAnnualDividendYield") or 0
+            if not div_yield:
+                try:
+                    one_year_ago = datetime.now() - timedelta(days=365)
+                    divs = ticker.dividends
+                    if not divs.empty:
+                        div_yield = divs[divs.index >= one_year_ago.strftime('%Y-%m-%d')].sum() / current_price if current_price else 0
+                except: pass
+            week_high = week_high or info.get("fiftyTwoWeekHigh")
+            week_low = week_low or info.get("fiftyTwoWeekLow")
+        except: company_name = symbol
 
-        current_price = float(hist["Close"].iloc[-1])
-        prev_price = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current_price
-
+        # --- CALCULATION FALLBACK FOR 52W ---
+        if week_high is None or week_high == "N/A":
+            try:
+                h1y = ticker.history(period="1y")
+                week_high = float(h1y["High"].max()) if not h1y.empty else "N/A"
+                week_low = float(h1y["Low"].min()) if not h1y.empty else "N/A"
+            except: pass
+        
+        # Final Formatting
+        mc_final = f"₹{market_cap/10**7:,.0f} Cr" if isinstance(market_cap, (int, float)) else "N/A"
+        current_price = current_price or 0
+        prev_price = prev_price or current_price
         change = current_price - prev_price
-        change_pct = (change / prev_price) * 100 if prev_price else 0
-
+        change_pct = (change / prev_price * 100) if prev_price else 0
+        
+        if "Open" not in hist.columns:
+            hist["Open"] = hist["Close"]
+        hist_data_str = ",".join([f"{d.strftime('%d-%m-%Y')} (Open: {o:.1f}, Close: {c:.1f})" for d, o, c in zip(hist.index, hist['Open'], hist['Close'])])
+        
         result = {
+            "HISTORICAL_DATA": hist_data_str,
+            "LIVE_PRICE_TODAY": current_price,
+            "PREVIOUS_CLOSE_TODAY": prev_price,
+            "current_price": current_price, # Alias for app.py
+            "open_price": open_price,
+            "previous_close": prev_price,   # Alias for app.py
             "symbol": symbol,
             "company_name": company_name,
-            "current_price": round(current_price, 2),
-            "previous_close": round(prev_price, 2),
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "volume": int(hist["Volume"].iloc[-1]),
-            "market_cap": market_cap,
-            "52_week_high": round(week_high, 2) if isinstance(week_high, float) else week_high,
-            "52_week_low":  round(week_low, 2)  if isinstance(week_low, float)  else week_low,
-            "year_high": week_high,
-            "year_low": week_low,
-            "pe_ratio": pe_ratio,
-            "currency": "INR",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S IST"),
+            "change": change,
+            "change_pct": change_pct,
+            "52_week_high": week_high,
+            "52_week_low": week_low,
+            "market_cap_str": mc_final,
+            "sector": sector,
+            "last_closing_date": (hist.index[-1].strftime('%d-%m-%Y') if not hist.empty else "N/A"),
+            "search_context": f"Sector: {sector}, Market Cap: {mc_final}"
         }
-
+        
         _cache[key] = result
         return result
-
     except Exception as e:
-
-        logger.error("get_stock_price(%s) failed: %s", symbol, e)
-
-        return {
-            "error": f"Unable to fetch data for {symbol}"
-        }
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"get_stock_price({symbol}) failed: {e}")
+        return {"symbol": symbol, "error": str(e)}
 
 
 
