@@ -945,7 +945,7 @@ elif page == "Stock Analysis":
             if st.button(f"⭐ Add {norm_sym.replace('.NS','')} to Watchlist", type="secondary", use_container_width=True):
                 res = add_to_watchlist(norm_sym, cname)
                 if res["success"]:
-                    st.success(res["message"])
+                    st.rerun()
                 else:
                     st.warning(res["message"])
 
@@ -1534,8 +1534,7 @@ elif page == "Watchlist":
                             cn = p.get("company_name", norm) if "error" not in p else norm
                             res = add_to_watchlist(norm, cn, note_in)
                             if res["success"]:
-                                st.toast(f"📈 {sym_in} added!", icon="✅")
-                                time.sleep(0.3); st.rerun()
+                                st.rerun()
                             else: st.error(res["message"])
                         else: st.error("❌ Invalid symbol")
                 else: st.warning("Symbol required.")
