@@ -1539,10 +1539,7 @@ elif page == "Watchlist":
                         else: st.error("❌ Invalid symbol")
                 else: st.warning("Symbol required.")
 
-    if hasattr(st, "fragment"):
-        st.fragment()(render_watchlist_add_logic)()
-    else:
-        render_watchlist_add_logic()
+    render_watchlist_add_logic()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1636,10 +1633,7 @@ elif page == "Watchlist":
                     st.warning("⚠️ Please select an asset to remove.")
 
 
-    if hasattr(st, "fragment"):
-        st.fragment()(render_watchlist_actions_logic)()
-    else:
-        render_watchlist_actions_logic()
+    render_watchlist_actions_logic()
 
 
 
