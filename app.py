@@ -1520,24 +1520,31 @@ elif page == "Watchlist":
     # ── ACTION SECTION (ADD) ───────────────────────────
     def render_watchlist_add_logic():
         with st.expander("➕ Add New Asset", expanded=False):
-            ca1, ca2 = st.columns([1.2, 2.2])
-            with ca1:
-                sym_in = st.text_input("Symbol", placeholder="RELIANCE.NS", key="wl_add_sym_vstable", label_visibility="collapsed").upper().strip()
-            with ca2:
-                note_in = st.text_input("Note (optional)", placeholder="e.g. Long-term", key="wl_add_note_vstable", label_visibility="collapsed")
-            if st.button("Add to Watchlist ➕", use_container_width=True, type="primary", key="wl_add_btn_vstable"):
-                if sym_in:
-                    with st.spinner("Validating..."):
-                        ok, norm = validate_symbol(sym_in)
-                        if ok:
-                            p  = get_stock_price(norm)
-                            cn = p.get("company_name", norm) if "error" not in p else norm
-                            res = add_to_watchlist(norm, cn, note_in)
-                            if res["success"]:
-                                st.rerun()
-                            else: st.error(res["message"])
-                        else: st.error("❌ Invalid symbol")
-                else: st.warning("Symbol required.")
+            with st.form("wl_add_form", clear_on_submit=True):
+                ca1, ca2 = st.columns([1.2, 2.2])
+                with ca1:
+                    sym_in = st.text_input("Symbol", placeholder="RELIANCE.NS", label_visibility="collapsed").upper().strip()
+                with ca2:
+                    note_in = st.text_input("Note (optional)", placeholder="e.g. Long-term", label_visibility="collapsed")
+                
+                submit_btn = st.form_submit_button("Add to Watchlist ➕", type="primary", use_container_width=True)
+                
+                if submit_btn:
+                    if sym_in:
+                        with st.spinner("Validating..."):
+                            ok, norm = validate_symbol(sym_in)
+                            if ok:
+                                p  = get_stock_price(norm)
+                                cn = p.get("company_name", norm) if "error" not in p else norm
+                                res = add_to_watchlist(norm, cn, note_in)
+                                if res["success"]:
+                                    st.rerun()
+                                else:
+                                    st.error(res["message"])
+                            else:
+                                st.error("❌ Invalid symbol")
+                    else:
+                        st.warning("Symbol required.")
 
     render_watchlist_add_logic()
 
